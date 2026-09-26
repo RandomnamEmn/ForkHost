@@ -42,17 +42,21 @@ AudioSettingsComponent::AudioSettingsComponent (AudioDeviceManager& dm,
     // --- Custom controls --------------------------------------------------
 
     // Latency / error label — matches JUCE's right-column alignment
-    latencyLabel.setColour (Label::textColourId, findColour (Label::textColourId));
     latencyLabel.setFont  (FontOptions (14.0f, Font::bold));
     addAndMakeVisible (latencyLabel);
     updateLatencyLabel();
 
     // Fade toggle — read initial state from AudioStream
     fadeToggle.setButtonText  ("Enable Fade In/Out");
+    auto* userSettings = getAppProperties().getUserSettings();
+    audioStream.fadeEnabled.store (userSettings->getBoolValue ("enableFade", audioStream.fadeEnabled.load()));
     fadeToggle.setToggleState (audioStream.fadeEnabled.load(), dontSendNotification);
     fadeToggle.onClick        = [this]
     {
-        audioStream.fadeEnabled = fadeToggle.getToggleState();
+        audioStream.fadeEnabled.store (fadeToggle.getToggleState());
+        auto* settings = getAppProperties().getUserSettings();
+        settings->setValue ("enableFade", fadeToggle.getToggleState());
+        settings->saveIfNeeded();
     };
     addAndMakeVisible (fadeToggle);
 
@@ -93,12 +97,9 @@ void AudioSettingsComponent::resized()
     const int itemH = 24;
     const int space = 6;
 
-    // Reserve space at the bottom for our extra controls
+    // Keep the host controls at the top so they remain easy to reach.
     const int ourHeight = itemH * 3 + space * 3;
-    auto ourArea = r.removeFromBottom (ourHeight);
-
-    // Give the remaining area to the selector
-    selector->setBounds (r);
+    auto ourArea = r.removeFromTop (ourHeight);
 
     // --- Arrange extra controls, aligned with JUCE's right column ---------
     // JUCE's AudioDeviceSettingsPanel uses:
@@ -117,6 +118,9 @@ void AudioSettingsComponent::resized()
     ourArea.removeFromTop (space);
     latencyLabel.setBounds    (rightColX, ourArea.getY(), rightColW, itemH);
     ourArea.removeFromTop (itemH);
+
+    r.removeFromTop (space);
+    selector->setBounds (r);
 }
 
 //==============================================================================

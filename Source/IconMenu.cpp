@@ -14,6 +14,7 @@
 #include "PluginWindow.h"
 #include "AudioSettingsComponent.hpp"
 #include "AudioDeviceInitHelpers.hpp"
+#include "HostTheme.hpp"
 #include "NoneAudioDevice.hpp"
 #include "DebugAudioDevice.hpp"
 #include "IsolatedPluginScanner.hpp"
@@ -42,9 +43,10 @@ void focusWindow (Component& window)
 
 Colour getPluginIndicatorColour (bool failed, bool bypassed)
 {
-    if (bypassed) return Colour (0xff737982);
-    if (failed)   return Colour (0xffd94a4a);
-    return Colour (0xff2e9b57);
+    const auto& lookAndFeel = LookAndFeel::getDefaultLookAndFeel();
+    if (bypassed) return lookAndFeel.findColour (LightHostTheme::bypassedPluginColourId);
+    if (failed)   return lookAndFeel.findColour (LightHostTheme::failedPluginColourId);
+    return lookAndFeel.findColour (LightHostTheme::activePluginColourId);
 }
 }
 
@@ -58,12 +60,14 @@ public:
         owner(owner_), pluginFormatManager(pluginFormatManager_)
     {
         setContentOwned(new ContentComponent(*this), true);
+        setUsingNativeTitleBar (false);
 
         optionsButton.setButtonText("Options");
         optionsButton.onClick = [this] { showOptionsMenu(); };
 
         detailLabel.setText("Select a plugin", dontSendNotification);
-        searchBox.setTextToShowWhenEmpty("Search plug-ins...", Colours::grey);
+        searchBox.setTextToShowWhenEmpty ("Search plug-ins...",
+            LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::secondaryTextColourId));
         searchBox.onTextChange = [this] { filterPlugins(); };
         sortFilter.addItem ("Name A-Z", 1);
         sortFilter.addItem ("Format", 2);
@@ -79,8 +83,8 @@ public:
         };
         formatFilter.onChange = [this] { filterPlugins(); };
         pluginListBox.setModel(this);
-        pluginListBox.setColour(ListBox::backgroundColourId,
-            findColour(DocumentWindow::backgroundColourId));
+        pluginListBox.setColour (ListBox::backgroundColourId,
+            LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::panelBackgroundColourId));
         pluginListBox.setColour(ListBox::outlineColourId, Colours::transparentBlack);
         pluginListBox.setRowHeight(24);
         rebuildList();
@@ -90,6 +94,23 @@ public:
 
         restoreWindowStateFromString(getAppProperties().getUserSettings()->getValue("listWindowPos"));
         setVisible(true);
+    }
+
+    void applyHostTheme()
+    {
+        const auto& hostLookAndFeel = LookAndFeel::getDefaultLookAndFeel();
+        setBackgroundColour (hostLookAndFeel.findColour (DocumentWindow::backgroundColourId));
+        searchBox.setTextToShowWhenEmpty ("Search plug-ins...",
+                                          hostLookAndFeel.findColour (LightHostTheme::secondaryTextColourId));
+        pluginListBox.setColour (ListBox::backgroundColourId,
+                                 hostLookAndFeel.findColour (LightHostTheme::panelBackgroundColourId));
+        if (auto* content = getContentComponent())
+        {
+            content->setColour (DocumentWindow::backgroundColourId,
+                                hostLookAndFeel.findColour (DocumentWindow::backgroundColourId));
+            content->repaint();
+        }
+        LightHostTheme::refreshHostComponentTree (*this);
     }
 
     ~PluginListWindow()
@@ -169,7 +190,7 @@ private:
     void paintListBoxItem(int rowNumber, Graphics& g, int width, int height, bool rowIsSelected) override
     {
         if (rowIsSelected)
-            g.fillAll(findColour(DirectoryContentsDisplayComponent::highlightColourId));
+            g.fillAll (LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::selectionBackgroundColourId));
 
         if (rowNumber < 0 || rowNumber >= (int) visiblePlugins.size())
             return;
@@ -332,7 +353,7 @@ private:
         void paintListBoxItem(int rowNumber, Graphics& g, int width, int height, bool rowIsSelected) override
         {
             if (rowIsSelected)
-                g.fillAll(findColour(DirectoryContentsDisplayComponent::highlightColourId));
+                g.fillAll (LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::selectionBackgroundColourId));
             g.setColour(findColour(ListBox::textColourId));
             g.setFont(Font(13.0f));
             g.drawText(paths[rowNumber], 4, 0, width - 8, height, Justification::centredLeft, true);
@@ -604,7 +625,8 @@ class IconMenu::PluginRackComponent : public Component,
                 g.fillEllipse (dot);
                 if (isMouseOver())
                 {
-                    g.setColour (Colours::white.withAlpha (0.45f));
+                    g.setColour (LookAndFeel::getDefaultLookAndFeel()
+                                     .findColour (Label::textColourId).withAlpha (0.45f));
                     g.drawEllipse (dot, 1.5f);
                 }
             }
@@ -650,9 +672,9 @@ class IconMenu::PluginRackComponent : public Component,
             void paint (Graphics& g) override
             {
                 auto bounds = getLocalBounds().toFloat();
-                g.setColour (Colour (0xff343a40));
+                g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (DocumentWindow::backgroundColourId).contrasting (0.10f));
                 g.fillRoundedRectangle (bounds, 5.0f);
-                g.setColour (Colour (0xffaeb4ba));
+                g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (Label::textColourId).withAlpha (0.7f));
                 for (int i = -1; i <= 1; ++i)
                     g.drawLine (bounds.getCentreX() + (float) i * 4.0f, bounds.getCentreY() - 5.0f,
                                 bounds.getCentreX() + (float) i * 4.0f, bounds.getCentreY() + 5.0f, 1.5f);
@@ -666,11 +688,11 @@ class IconMenu::PluginRackComponent : public Component,
                     dragStarted = true;
                     Image dragImage (Image::ARGB, 300, 38, true);
                     Graphics g (dragImage);
-                    g.setColour (Colour (0xff252a30));
+                    g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (DocumentWindow::backgroundColourId));
                     g.fillRoundedRectangle (0.0f, 0.0f, 300.0f, 38.0f, 5.0f);
                     g.setColour (getPluginIndicatorColour (row.failed, row.bypassed));
                     g.fillEllipse (10.0f, 11.0f, 16.0f, 16.0f);
-                    g.setColour (Colours::white);
+                    g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (Label::textColourId));
                     g.setFont (FontOptions (14.0f));
                     g.drawText (row.pluginName, 36, 0, 254, 38, Justification::centredLeft, true);
                     const Point<int> imageOffsetFromMouse (12, -19);
@@ -714,7 +736,7 @@ class IconMenu::PluginRackComponent : public Component,
         }
         void paint (Graphics& g) override
         {
-            g.setColour (Colour (0xff343a40));
+            g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (DocumentWindow::backgroundColourId).contrasting (0.10f));
             g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
         }
         void resized() override
@@ -740,9 +762,10 @@ public:
     explicit PluginRackComponent (IconMenu& owner_)
         : icon (owner_), listBox ("Active Plugins", this)
     {
+        setOpaque (true);
         listBox.setRowHeight (42);
         listBox.setColour (ListBox::backgroundColourId,
-            LookAndFeel::getDefaultLookAndFeel().findColour (DocumentWindow::backgroundColourId));
+            LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::panelBackgroundColourId));
         addButton.setButtonText ("Add plug-ins...");
         addButton.onClick = [this] { icon.reloadPlugins(); };
         instructions.setText ("Click the dot to bypass. Middle-click to reload. Double left-click to edit; double right-click to remove. Drag the grip to reorder.", dontSendNotification);
@@ -752,6 +775,12 @@ public:
         addAndMakeVisible (listBox);
     }
     ~PluginRackComponent() override { listBox.setModel (nullptr); }
+
+    void paint (Graphics& g) override
+    {
+        g.fillAll (LookAndFeel::getDefaultLookAndFeel()
+                     .findColour (LightHostTheme::panelBackgroundColourId));
+    }
     bool isInterestedInDragSource (const SourceDetails& details) override
     {
         return details.description.toString().startsWith ("plugin-row:");
@@ -770,6 +799,8 @@ public:
     }
     void refresh()
     {
+        listBox.setColour (ListBox::backgroundColourId,
+            LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::panelBackgroundColourId));
         listBox.updateContent();
         listBox.repaint();
     }
@@ -856,7 +887,7 @@ private:
     void paintListBoxItem (int row, Graphics& g, int width, int height, bool selected) override
     {
         if (row < 0 || row >= presets.size()) return;
-        if (selected) g.fillAll (listBox.findColour (DirectoryContentsDisplayComponent::highlightColourId));
+        if (selected) g.fillAll (listBox.findColour (LightHostTheme::selectionBackgroundColourId));
         g.setColour (listBox.findColour (ListBox::textColourId));
         g.drawText (presets.getReference (row).getFileNameWithoutExtension(),
                     8, 0, width - 16, height, Justification::centredLeft, true);
@@ -903,17 +934,102 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
             tabs.addTab ("Active Plugins", background, &rack, false);
             tabs.addTab ("Presets", background, &presets, false);
             tabs.addTab ("Audio & MIDI", background, &audio, false);
+            themeLabel.setText ("Theme:", dontSendNotification);
+            addAndMakeVisible (themeLabel);
+            themeSelector.addItem ("Dark", 1);
+            themeSelector.addItem ("Light", 2);
+            themeSelector.addItem ("Midnight", 3);
+            themeSelector.addItem ("Custom", 4);
+            auto* settings = getAppProperties().getUserSettings();
+            palette = LightHostTheme::load (*settings);
+            const auto savedTheme = settings->getValue ("hostTheme", "Dark");
+            themeSelector.setSelectedId (savedTheme == "Light" ? 2 : savedTheme == "Midnight" ? 3
+                                         : savedTheme == "Custom" ? 4 : 1, dontSendNotification);
+            themeSelector.onChange = [this]
+            {
+                auto* settings = getAppProperties().getUserSettings();
+                if (themeSelector.getSelectedId() == 4)
+                {
+                    palette = LightHostTheme::loadCustom (*settings);
+                    settings->setValue ("hostTheme", "Custom");
+                    settings->saveIfNeeded();
+                }
+                else
+                {
+                    palette = LightHostTheme::preset (themeSelector.getText());
+                    settings->setValue ("hostTheme", themeSelector.getText());
+                    settings->saveIfNeeded();
+                }
+                applyPaletteToWindows();
+            };
+            addAndMakeVisible (themeSelector);
+            customizeThemeButton.setButtonText ("Customize...");
+            customizeThemeButton.onClick = [this] { openThemeEditor(); };
+            addAndMakeVisible (customizeThemeButton);
             addAndMakeVisible (tabs);
         }
 
         ~MainContent() override { owner.persistAudioSettings (audio); }
 
-        void resized() override { tabs.setBounds (getLocalBounds()); }
+        void resized() override
+        {
+            auto area = getLocalBounds();
+            auto themeRow = area.removeFromTop (34).reduced (8, 3);
+            customizeThemeButton.setBounds (themeRow.removeFromRight (104));
+            themeRow.removeFromRight (8);
+            themeSelector.setBounds (themeRow.removeFromRight (120));
+            themeLabel.setBounds (themeRow.removeFromRight (48));
+            tabs.setBounds (area);
+        }
         void refresh() { rack.refresh(); presets.refresh(); }
+
+        void openThemeEditor()
+        {
+            auto safeThis = Component::SafePointer<MainContent> (this);
+            DialogWindow::LaunchOptions options;
+            options.content.setOwned (new LightHostTheme::Editor (palette, [safeThis] (const LightHostTheme::Palette& updated)
+            {
+                if (auto* self = safeThis.getComponent())
+                {
+                    self->palette = updated;
+                    self->themeSelector.setSelectedId (4, dontSendNotification);
+                    LightHostTheme::saveCustom (*getAppProperties().getUserSettings(), self->palette);
+                    self->applyPaletteToWindows();
+                }
+            }));
+            options.dialogTitle = "Customize Light Host Colors";
+            options.dialogBackgroundColour = LightHostTheme::customizationLookAndFeel()
+                .findColour (ResizableWindow::backgroundColourId);
+            options.escapeKeyTriggersCloseButton = true;
+            options.useNativeTitleBar = true;
+            options.resizable = true;
+            options.launchAsync();
+        }
+
+        void applyPaletteToWindows()
+        {
+            if (auto* hostLookAndFeel = dynamic_cast<LookAndFeel_V4*> (&LookAndFeel::getDefaultLookAndFeel()))
+                LightHostTheme::apply (*hostLookAndFeel, palette);
+            if (auto* window = dynamic_cast<DocumentWindow*> (getTopLevelComponent()))
+                window->setBackgroundColour (palette.window);
+            tabs.setColour (TabbedComponent::backgroundColourId, palette.window);
+            for (int i = 0; i < tabs.getNumTabs(); ++i)
+                tabs.setTabBackgroundColour (i, palette.window);
+            rack.refresh();
+            presets.refresh();
+            audio.repaint();
+            owner.refreshThemeOnOpenWindows();
+            if (auto* top = getTopLevelComponent())
+                LightHostTheme::refreshHostComponentTree (*top);
+        }
         void showAudioTab() { tabs.setCurrentTabIndex (2); }
 
     private:
         IconMenu& owner;
+        Label themeLabel;
+        ComboBox themeSelector;
+        TextButton customizeThemeButton;
+        LightHostTheme::Palette palette;
         PluginRackComponent rack;
         PresetBrowserComponent presets;
         AudioSettingsComponent audio;
@@ -928,6 +1044,7 @@ public:
           owner (host)
     {
         setContentOwned (new MainContent (owner), true);
+        setUsingNativeTitleBar (false);
         setResizable (true, true);
         setResizeLimits (520, 360, 1400, 1000);
         centreWithSize (860, 620);
@@ -1017,6 +1134,7 @@ IconMenu::IconMenu (const HostOptions& options)
     // Audio device
     auto* settings = getAppProperties().getUserSettings();
     player.setDefaultBpm (settings->getDoubleValue ("defaultBpm", 0.0));
+    player.fadeEnabled.store (settings->getBoolValue ("enableFade", player.fadeEnabled.load()));
     String audioInitError;
 
     if (hostOptions.debugMode)
@@ -1025,7 +1143,6 @@ IconMenu::IconMenu (const HostOptions& options)
         // exactly like a normal host, but its start() method never invokes the
         // real-time audio callback. Debugger stops therefore cannot underrun,
         // deadlock, or trip an external host watchdog.
-        player.fadeEnabled.store (false);
         deviceManager.setCurrentAudioDeviceType (DebugAudioIODevice::typeName(), false);
 
         AudioDeviceManager::AudioDeviceSetup debugSetup;
@@ -1197,6 +1314,8 @@ IconMenu::IconMenu (const HostOptions& options)
             defaultFile.getFullPathName());
         getAppProperties().saveIfNeeded();
     }
+
+    scheduleRackAutosave();
 
     // Instantiate command-line plugins only after JUCE has entered its normal
     // message loop. Some plugins display modal UI during construction, and
@@ -1470,7 +1589,7 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
             PluginDescription plugin = *im->knownPluginList.getType(im->knownPluginList.getIndexChosenByMenu(id));
 
             im->pluginChain->add(plugin);
-            im->presetManager->markDirty();
+            im->markPresetDirty();
             PluginWindow::updateAllTitlesAndToolbars(im);
         }
         // Bypass plugin
@@ -1512,7 +1631,7 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
             int index = id - im->INDEX_MOVE_UP;
 
             im->pluginChain->moveUp(index);
-            im->presetManager->markDirty();
+            im->markPresetDirty();
             PluginWindow::updateAllTitlesAndToolbars(im);
         }
         // Move plugin down the list
@@ -1521,7 +1640,7 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
             int index = id - im->INDEX_MOVE_DOWN;
 
             im->pluginChain->moveDown(index);
-            im->presetManager->markDirty();
+            im->markPresetDirty();
             PluginWindow::updateAllTitlesAndToolbars(im);
         }
     }
@@ -1621,10 +1740,13 @@ bool IconMenu::loadPluginRequest (const PluginLaunchRequest& request, String& er
 
     if (hostOptions.openEditors)
     {
+        // The chain may change before this callback runs; resolve the node again.
+        const auto nodeId = slot.node->nodeID;
         auto safeThis = Component::SafePointer<IconMenu> (this);
-        MessageManager::callAsync ([safeThis, index] {
+        MessageManager::callAsync ([safeThis, nodeId]
+        {
             if (auto* self = safeThis.getComponent())
-                self->openPluginEditor (index);
+                self->openPluginEditor (self->pluginChain->getSlotIndexForNode (nodeId));
         });
     }
 
@@ -1763,8 +1885,7 @@ void IconMenu::applyStartupOptions()
 void IconMenu::togglePluginBypass(int timeSortedIndex)
 {
     pluginChain->toggleBypass(timeSortedIndex);
-    if (presetManager != nullptr)
-        presetManager->markDirty();
+    markPresetDirty();
     PluginWindow::updateAllTitlesAndToolbars(this);
     if (mainControlWindow != nullptr)
     {
@@ -1776,7 +1897,7 @@ void IconMenu::togglePluginBypass(int timeSortedIndex)
 void IconMenu::movePluginUp(int timeSortedIndex)
 {
     pluginChain->moveUp(timeSortedIndex);
-    presetManager->markDirty();
+    markPresetDirty();
     PluginWindow::updateAllTitlesAndToolbars(this);
 }
 
@@ -1784,7 +1905,7 @@ void IconMenu::movePluginDown(int timeSortedIndex)
 {
     pluginChain->moveDown(timeSortedIndex);
     // See comment in movePluginUp() — same reasoning applies.
-    presetManager->markDirty();
+    markPresetDirty();
     PluginWindow::updateAllTitlesAndToolbars(this);
 }
 
@@ -1815,7 +1936,7 @@ void IconMenu::removePluginAt (int timeSortedIndex)
     player.suspend (deviceManager);
     pluginChain->remove (timeSortedIndex);
     player.resume (deviceManager, graph);
-    presetManager->markDirty();
+    markPresetDirty();
     PluginWindow::updateAllTitlesAndToolbars (this);
     if (mainControlWindow != nullptr)
     {
@@ -1828,7 +1949,7 @@ void IconMenu::movePluginTo (int fromIndex, int toIndex)
 {
     if (pluginChain->moveTo (fromIndex, toIndex))
     {
-        presetManager->markDirty();
+        markPresetDirty();
         PluginWindow::updateAllTitlesAndToolbars (this);
     if (mainControlWindow != nullptr)
         mainControlWindow->refresh();
@@ -1960,8 +2081,32 @@ void IconMenu::triggerAudioDeviceRecovery()
     });
 }
 
+void IconMenu::scheduleRackAutosave()
+{
+    if (! chainPersistenceEnabled)
+        return;
+
+    auto safeThis = Component::SafePointer<IconMenu> (this);
+    Timer::callAfterDelay (30000, [safeThis]
+    {
+        if (auto* self = safeThis.getComponent())
+        {
+            self->persistRackCheckpoint();
+            self->scheduleRackAutosave();
+        }
+    });
+}
+
+void IconMenu::persistRackCheckpoint()
+{
+    if (chainPersistenceEnabled && pluginChain != nullptr)
+        pluginChain->saveToProperties (getAppProperties());
+}
+
 void IconMenu::markPresetDirty()
 {
+    persistRackCheckpoint();
+
     if (presetManager == nullptr)
         return;
 
@@ -2002,6 +2147,13 @@ void IconMenu::persistAudioSettings (const AudioSettingsComponent& audioSettings
     userSettings->setValue ("enableFade", audioSettingsComp.isFadeEnabled());
     userSettings->setValue ("defaultBpm", player.getDefaultBpm());
     userSettings->saveIfNeeded();
+}
+
+void IconMenu::refreshThemeOnOpenWindows()
+{
+    if (pluginListWindow != nullptr)
+        pluginListWindow->applyHostTheme();
+    PluginWindow::updateHostTheme();
 }
 
 void IconMenu::reloadPlugins()

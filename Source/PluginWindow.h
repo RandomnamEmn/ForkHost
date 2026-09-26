@@ -32,6 +32,7 @@ public:
     static bool containsActiveWindows();
 
     static void updateAllTitlesAndToolbars(IconMenu* iconMenu);
+    static void updateHostTheme();
     static bool isWindowOpenFor(AudioProcessorGraph::NodeID nodeId);
 
     void moved() override;
@@ -69,6 +70,7 @@ private:
     friend class ::EditorResizeListener;
     std::unique_ptr<ComponentListener> editorResizeListener;
     bool isResizingInternally = false;
+    bool closePending = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginWindow)
 };

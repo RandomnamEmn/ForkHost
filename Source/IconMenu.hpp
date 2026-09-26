@@ -56,6 +56,7 @@ public:
     void loadPresetFile (const File& file);
     void openPluginEditor (int index);
     void reloadPlugins();
+    void refreshThemeOnOpenWindows();
 
     void togglePluginBypass(int timeSortedIndex);
     void reloadPluginAt (int timeSortedIndex);
@@ -83,6 +84,8 @@ private:
     void setIcon();
     bool loadPluginRequest (const PluginLaunchRequest& request, String& errorMessage);
     void applyStartupOptions();
+    void scheduleRackAutosave();
+    void persistRackCheckpoint();
 
     HostOptions hostOptions;
     bool chainPersistenceEnabled = true;

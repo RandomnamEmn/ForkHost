@@ -1,26 +1,15 @@
 Light Host Reforge
 ---
 
-A fork of [LightHost](https://github.com/opencma/LightHost) with the following changes:
+A fork of [LightHostReforge](https://github.com/CenX233/LightHostReforge) with the following changes:
 
-- Ported to JUCE8
-- Added VST2 and VST3 plug-in hosting
-- Added support for Waves plugins (tested with Waves V15)
-- Added plug-in scanning for standard and custom folders, with isolated helpers for crash-prone plug-ins
-- Added effect-chain presets and saves the current rack when the app closes
-- Added a main window for plug-in management, presets, and audio/MIDI settings
-- Added plugin window toolbar
-- Added Loopback audio device type, capable of capturing desktop audio into the effect chain (Windows only, no output support)
-- Added MIDI input support for hosted instrument plugins
-- Added timed helper-process checks for Windows MIDI responsiveness and plug-in scanning
-- Added a default BPM option for plug-ins that need a continuously advancing host transport
-- Support for resizing plugin windows, partial HiDPI support
-- Support for keeping plugin windows on top
-- Added plug-in bypass and latency status
-- Added fade-in/fade-out transition when audio chain changes
-- Added plug-in scan failure and helper stack-trace logs on Windows
-- Changed to CMake build system
-- Added release builds for Windows x64, macOS Apple Silicon, and macOS Intel
+- Added optional VST2 hosting and macOS AU support alongside VST3.
+- Added plug-in scanning across standard and custom folders, using isolated helpers with failure and timeout logs.
+- Added MIDI input for hosted instruments and a Windows MIDI responsiveness check.
+- Expanded rack and preset management, with a main window for plug-ins, presets, and audio/MIDI settings.
+- Added a default BPM transport option and persistent fade settings.
+- Added plug-in editor scaling and customizable RGB themes across Light Host windows.
+- Added a symbol-rich debugger build and packaged Windows and macOS releases, plus one-line `lhc` installers.
 
 Notes:
 

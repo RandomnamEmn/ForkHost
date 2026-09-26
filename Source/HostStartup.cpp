@@ -3,6 +3,7 @@
 #include "HostOptions.hpp"
 #include "IsolatedPluginScanner.hpp"
 #include "AudioDeviceInitHelpers.hpp"
+#include "HostTheme.hpp"
 #include <iostream>
 
 #if ! (JUCE_PLUGINHOST_VST || JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
@@ -69,6 +70,7 @@ public:
         appProperties = std::make_unique<ApplicationProperties>();
         appProperties->setStorageParameters (options);
 
+        LightHostTheme::apply (lookAndFeel, LightHostTheme::load (*appProperties->getUserSettings()));
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
         mainWindow = std::make_unique<IconMenu> (parsed.options);
@@ -112,7 +114,7 @@ public:
 
     ApplicationCommandManager commandManager;
     std::unique_ptr<ApplicationProperties> appProperties;
-    LookAndFeel_V4 lookAndFeel;
+    LightHostTheme::HostLookAndFeel lookAndFeel;
 
 private:
     struct ParsedCommandLine

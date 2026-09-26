@@ -2,11 +2,14 @@
 #include "PluginWindow.h"
 #include "IconMenu.hpp"
 #include "PluginChain.hpp"
+#include "HostTheme.hpp"
 #include <atomic>
 #include <cmath>
 
 class PluginWindow;
 static Array <PluginWindow*> activePluginWindows;
+// Keep third-party editor controls on JUCE's default palette when the host theme changes.
+static LookAndFeel_V4 pluginEditorLookAndFeel;
 static constexpr int toolbarHeight = 28;
 
 //==============================================================================
@@ -111,7 +114,6 @@ public:
         int ms = (sampleRate > 0) ? (int) (latencySamples / sampleRate * 1000) : 0;
         latencyLabel.setText ("Latency:" + String (ms) + "ms (" + String (latencySamples) + "sample)",
                               dontSendNotification);
-        latencyLabel.setColour (Label::textColourId, findColour (Label::textColourId));
 
         setSize (400, 300);
     }
@@ -167,6 +169,11 @@ public:
                 }
             });
         }
+    }
+
+    void paint (Graphics& g) override
+    {
+        g.fillAll (LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::panelBackgroundColourId));
     }
 
     void resized() override
@@ -241,6 +248,10 @@ PluginWindow::PluginWindow (Component* const pluginEditor,
       unscaledEditorWidth (prefW > 50 ? prefW : 400),
       unscaledEditorHeight (prefH > 50 ? prefH : 300)
 {
+    // Isolate the plug-in editor from Light Host's selectable host UI theme.
+    if (&pluginEditor->getLookAndFeel() == &LookAndFeel::getDefaultLookAndFeel())
+        pluginEditor->setLookAndFeel (&pluginEditorLookAndFeel);
+
     // Step 1: Set flags that affect getContentComponentBorder() FIRST
     setUsingNativeTitleBar (false);
 
@@ -342,6 +353,16 @@ void PluginWindow::updateAllTitlesAndToolbars (IconMenu* iconMenu)
     ignoreUnused (iconMenu);
     for (auto* w : activePluginWindows)
         w->updateTitleAndToolbar();
+}
+
+void PluginWindow::updateHostTheme()
+{
+    const auto& lookAndFeel = LookAndFeel::getDefaultLookAndFeel();
+    for (auto* window : activePluginWindows)
+    {
+        window->setBackgroundColour (lookAndFeel.findColour (DocumentWindow::backgroundColourId));
+        LightHostTheme::refreshHostComponentTree (*window);
+    }
 }
 
 void PluginWindow::closeCurrentlyOpenWindowsFor (AudioProcessorGraph::NodeID nodeId)
@@ -456,7 +477,8 @@ PluginWindow* PluginWindow::getWindowFor (AudioProcessorGraph::Node::Ptr node,
                                           WindowFormatType type,
                                           IconMenu* menu)
 {
-    jassert (node != nullptr);
+    if (node == nullptr)
+        return nullptr;
 
     for (int i = activePluginWindows.size(); --i >= 0;)
         if (activePluginWindows.getUnchecked(i)->owner == node
@@ -464,6 +486,9 @@ PluginWindow* PluginWindow::getWindowFor (AudioProcessorGraph::Node::Ptr node,
             return activePluginWindows.getUnchecked(i);
 
     AudioProcessor* processor = node->getProcessor();
+
+    if (processor == nullptr)
+        return nullptr;
     AudioProcessorEditor* ui = nullptr;
 
     if (type == Normal)
@@ -505,6 +530,10 @@ PluginWindow::~PluginWindow()
     // dangling pointer crash when the editor fires events later.
     if (auto* editor = getEditorComponent())
         editor->removeComponentListener (editorResizeListener.get());
+
+    if (auto* editor = getEditorComponent())
+        if (&editor->getLookAndFeel() == &pluginEditorLookAndFeel)
+            editor->setLookAndFeel (nullptr);
 
     clearContentComponent();
 }
@@ -573,8 +602,21 @@ void PluginWindow::resized()
 
 void PluginWindow::closeButtonPressed()
 {
+    if (closePending)
+        return;
+
+    closePending = true;
     owner->properties.set (getOpenProp (type), false);
-    delete this;
+    setVisible (false);
+
+    // JUCE may continue using the DocumentWindow after this callback returns.
+    // Defer deletion until the callback stack has unwound.
+    Component::SafePointer<PluginWindow> safeThis (this);
+    MessageManager::callAsync ([safeThis]
+    {
+        if (auto* window = safeThis.getComponent())
+            delete window;
+    });
 }
 
 bool PluginWindow::keyPressed(const KeyPress& key)

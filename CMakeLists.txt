@@ -88,6 +88,25 @@ else()
     message(STATUS "JUCE_VST3_FORMAT_SRC not found — skipping WaveShell VST3 patch")
 endif()
 
+# JUCE's audio device selector hard-codes grey for empty MIDI/device lists,
+# which bypasses the host's selected text color. Make those labels follow the
+# ListBox text color, while keeping the patch local to the JUCE source used to
+# build this host.
+if(JUCE_MODULES_DIR AND EXISTS "${JUCE_MODULES_DIR}/juce_audio_utils/gui/juce_AudioDeviceSelectorComponent.cpp")
+    set(_LIGHTHOST_JUCE_DEVICE_SELECTOR
+        "${JUCE_MODULES_DIR}/juce_audio_utils/gui/juce_AudioDeviceSelectorComponent.cpp")
+    file(READ "${_LIGHTHOST_JUCE_DEVICE_SELECTOR}" _LIGHTHOST_JUCE_DEVICE_SELECTOR_CONTENT)
+    string(REPLACE
+        "g.setColour (Colours::grey);"
+        "g.setColour (findColour (ListBox::textColourId));"
+        _LIGHTHOST_JUCE_DEVICE_SELECTOR_PATCHED
+        "${_LIGHTHOST_JUCE_DEVICE_SELECTOR_CONTENT}")
+    if(NOT _LIGHTHOST_JUCE_DEVICE_SELECTOR_CONTENT STREQUAL _LIGHTHOST_JUCE_DEVICE_SELECTOR_PATCHED)
+        message(STATUS "Patching JUCE audio-device empty-list text to use the host theme")
+        file(WRITE "${_LIGHTHOST_JUCE_DEVICE_SELECTOR}" "${_LIGHTHOST_JUCE_DEVICE_SELECTOR_PATCHED}")
+    endif()
+endif()
+
 #==============================================================================
 # Application targets
 #==============================================================================
