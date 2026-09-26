@@ -7,23 +7,26 @@
 
 #include "AudioSettingsComponent.hpp"
 #include "IconMenu.hpp"
+#include "AudioDeviceInitHelpers.hpp"
 
 //==============================================================================
 AudioSettingsComponent::AudioSettingsComponent (AudioDeviceManager& dm,
                                                 AudioStream& stream,
                                                 PluginChain& chain,
-                                                const String& initError)
+                                                const String& initError,
+                                                bool midiServiceIsResponsive_)
     : deviceManager      (dm),
       audioStream        (stream),
       pluginChain        (chain),
-      initialisationError (initError)
+      initialisationError (initError),
+      midiServiceIsResponsive (midiServiceIsResponsive_)
 {
     // Create the AudioDeviceSelectorComponent on the heap.
     // hideAdvancedOptionsWithButton = false so sample-rate / buffer-size
     // controls are visible by default (our custom controls sit below them).
     selector = std::make_unique<AudioDeviceSelectorComponent> (dm,
                         0, 256, 0, 256,
-                        true,     // showMidiInputOptions
+                        midiServiceIsResponsive, // showMidiInputOptions
                         false,    // showMidiOutputSelector
                         true,     // showChannelsAsStereoPairs
                         false);   // hideAdvancedOptionsWithButton
@@ -53,6 +56,16 @@ AudioSettingsComponent::AudioSettingsComponent (AudioDeviceManager& dm,
     };
     addAndMakeVisible (fadeToggle);
 
+    defaultBpmLabel.setText ("Default BPM (0 = stopped):", dontSendNotification);
+    addAndMakeVisible (defaultBpmLabel);
+    defaultBpmEditor.setInputRestrictions (12, "0123456789.-");
+    defaultBpmEditor.setText (String (audioStream.getDefaultBpm(), 3), dontSendNotification);
+    defaultBpmEditor.onTextChange = [this]
+    {
+        audioStream.setDefaultBpm (defaultBpmEditor.getText().getDoubleValue());
+    };
+    addAndMakeVisible (defaultBpmEditor);
+
     // Listen for device changes to refresh the latency display
     deviceManager.addChangeListener (this);
 
@@ -81,7 +94,7 @@ void AudioSettingsComponent::resized()
     const int space = 6;
 
     // Reserve space at the bottom for our extra controls
-    const int ourHeight = itemH * 2 + space * 2;  // latency label + fade toggle + spacings
+    const int ourHeight = itemH * 3 + space * 3;
     auto ourArea = r.removeFromBottom (ourHeight);
 
     // Give the remaining area to the selector
@@ -96,6 +109,10 @@ void AudioSettingsComponent::resized()
 
     ourArea.removeFromTop (space);
     fadeToggle.setBounds      (rightColX, ourArea.getY(), rightColW, itemH);
+    ourArea.removeFromTop (itemH);
+    ourArea.removeFromTop (space);
+    defaultBpmLabel.setBounds (rightColX, ourArea.getY(), 190, itemH);
+    defaultBpmEditor.setBounds (rightColX + 194, ourArea.getY(), 72, itemH);
     ourArea.removeFromTop (itemH);
     ourArea.removeFromTop (space);
     latencyLabel.setBounds    (rightColX, ourArea.getY(), rightColW, itemH);
@@ -140,7 +157,10 @@ void AudioSettingsComponent::restorePerTypeState (const String& type)
     if (it != perTypeState.end() && it->second != nullptr)
     {
         deviceManager.closeAudioDevice();
-        deviceManager.initialise (256, 256, it->second.get(), false);
+        if (midiServiceIsResponsive)
+            deviceManager.initialise (256, 256, it->second.get(), false);
+        else
+            AudioDeviceInitHelpers::initialiseAudioWithoutMidi (deviceManager, 256, 256, it->second.get());
         // Re-save after restore so the map reflects the restored state
         if (auto state = deviceManager.createStateXml())
             perTypeState[type] = std::make_unique<XmlElement> (*state);
@@ -152,7 +172,10 @@ void AudioSettingsComponent::restorePerTypeState (const String& type)
     if (auto saved = getAppProperties().getUserSettings()->getXmlValue (key))
     {
         deviceManager.closeAudioDevice();
-        deviceManager.initialise (256, 256, saved.get(), false);
+        if (midiServiceIsResponsive)
+            deviceManager.initialise (256, 256, saved.get(), false);
+        else
+            AudioDeviceInitHelpers::initialiseAudioWithoutMidi (deviceManager, 256, 256, saved.get());
         // Cache in memory for faster switching later
         if (auto state = deviceManager.createStateXml())
             perTypeState[type] = std::make_unique<XmlElement> (*state);

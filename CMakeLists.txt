@@ -6,6 +6,36 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(JUCE CONFIG REQUIRED)
 
+# VST2 hosting is opt-in because JUCE requires the separately-supplied VST2 SDK.
+# Do not vendor or distribute Steinberg's VST2 SDK as part of this repository.
+option(LIGHTHOST_ENABLE_VST2_HOST "Enable local VST2 plug-in hosting" OFF)
+set(LIGHTHOST_VST2_SDK_PATH "" CACHE PATH
+    "Path to a locally available VST2 SDK (must contain pluginterfaces/vst2.x headers)")
+
+if(LIGHTHOST_ENABLE_VST2_HOST)
+    if(NOT LIGHTHOST_VST2_SDK_PATH)
+        message(FATAL_ERROR
+            "LIGHTHOST_ENABLE_VST2_HOST=ON requires -DLIGHTHOST_VST2_SDK_PATH=<path to VST2 SDK>")
+    endif()
+
+    if(NOT EXISTS "${LIGHTHOST_VST2_SDK_PATH}/pluginterfaces/vst2.x/aeffect.h")
+        message(FATAL_ERROR
+            "VST2 SDK headers not found under '${LIGHTHOST_VST2_SDK_PATH}'. "
+            "Expected pluginterfaces/vst2.x/aeffect.h")
+    endif()
+
+    if(NOT COMMAND juce_set_vst2_sdk_path)
+        message(FATAL_ERROR
+            "This JUCE package does not expose juce_set_vst2_sdk_path(); "
+            "use a JUCE CMake package with VST2 host support")
+    endif()
+
+    juce_set_vst2_sdk_path("${LIGHTHOST_VST2_SDK_PATH}")
+    set(LIGHTHOST_PLUGINHOST_VST 1)
+else()
+    set(LIGHTHOST_PLUGINHOST_VST 0)
+endif()
+
 #==============================================================================
 # JUCE VST3PluginFormat patch (optional): accept "AudioEffect" category (WaveShell)
 #==============================================================================
@@ -68,6 +98,7 @@ option(LIGHTHOST_CLI_KEEP_SYMBOLS
 
 set(LIGHTHOST_SOURCES
     Source/HostStartup.cpp
+    Source/IsolatedPluginScanner.cpp
     Source/IconMenu.cpp
     Source/AudioSettingsComponent.cpp
     Source/PluginChain.cpp
@@ -100,7 +131,7 @@ function(configure_light_host_target target)
 
     target_compile_definitions(${target} PRIVATE
         JUCE_PLUGINHOST_VST3=1
-        JUCE_PLUGINHOST_VST=0
+        JUCE_PLUGINHOST_VST=${LIGHTHOST_PLUGINHOST_VST}
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
         JUCE_MODAL_LOOPS_PERMITTED=1
@@ -109,8 +140,12 @@ function(configure_light_host_target target)
     )
 
     if(WIN32)
-        target_compile_definitions(${target} PRIVATE JUCE_ASIO=1)
+        target_compile_definitions(${target} PRIVATE
+            JUCE_ASIO=1
+            JUCE_USE_WINRT_MIDI=1
+        )
         target_include_directories(${target} PRIVATE ${ASIOSDK_INCLUDE_DIR})
+        target_link_libraries(${target} PRIVATE dbghelp)
     else()
         target_compile_definitions(${target} PRIVATE JUCE_ASIO=0)
     endif()

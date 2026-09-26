@@ -72,6 +72,7 @@ public:
     int add (const PluginDescription& desc);
 
     /** Remove a plugin from the chain by index.
+        The caller must suspend the audio callback before calling this method.
         Closes its window (if open) and removes its graph node.
     */
     bool remove (int index);
@@ -81,11 +82,17 @@ public:
     */
     void addSlot (PluginSlot&& slot)   { chain.push_back (std::move (slot)); }
 
+    /** Recreate one plug-in instance, keeping its saved state and bypass setting. */
+    bool reload (int index);
+
     /** Move a plugin up one position in the chain. */
     bool moveUp (int index);
 
     /** Move a plugin down one position in the chain. */
     bool moveDown (int index);
+
+    /** Move one slot to a new chain position in a single graph rebuild. */
+    bool moveTo (int fromIndex, int toIndex);
 
     /** Toggle bypass state for the plugin at \a index.
         If the plugin has no graph node (failed), only the recorded state changes.
@@ -115,6 +122,9 @@ public:
         The caller must pause the audio callback before calling this.
     */
     void loadAll();
+
+    /** Replace the graph with only its host I/O nodes. Audio must be paused. */
+    void prepareEmptyGraph();
 
     //@}
     //==============================================================================

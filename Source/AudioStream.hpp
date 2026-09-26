@@ -13,6 +13,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <atomic>
+#include <cmath>
 
 using namespace juce;
 
@@ -35,7 +36,7 @@ class AudioStream  : public AudioProcessorPlayer,
 {
 public:
     explicit AudioStream (AudioDeviceManager& dm)
-        : AudioProcessorPlayer (false), midiDeviceManager (dm)
+        : AudioProcessorPlayer (false), midiDeviceManager (dm), transportPlayHead (*this)
     {
         // Listen to every MIDI input enabled in AudioDeviceManager.  Passing an
         // empty device identifier means newly enabled devices start forwarding
@@ -46,7 +47,11 @@ public:
     ~AudioStream() override
     {
         if (currentGraph != nullptr)
+        {
             currentGraph->removeChangeListener (this);
+            if (currentGraph->getPlayHead() == &transportPlayHead)
+                currentGraph->setPlayHead (nullptr);
+        }
 
         midiDeviceManager.removeMidiInputDeviceCallback ({}, this);
     }
@@ -59,6 +64,18 @@ public:
         is always the fadeRampMs / fadeExtraMs compile-time constants —
         unchecking simply skips the ramp, re-checking restores it. */
     std::atomic<bool> fadeEnabled{ true };
+
+    /** A positive default BPM reports a continuously advancing, playing host
+        transport to hosted plug-ins. Zero or a negative value reports stopped. */
+    void setDefaultBpm (double bpm) noexcept
+    {
+        if (! std::isfinite (bpm))
+            bpm = 0.0;
+
+        defaultBpm.store (jlimit (-100000.0, 100000.0, bpm));
+    }
+
+    double getDefaultBpm() const noexcept { return defaultBpm.load(); }
 
     /** Called when the audio device reports a runtime error
         (e.g. after sleep/wake or device disconnection). */
@@ -76,16 +93,21 @@ public:
         AudioProcessorPlayer::setProcessor is not virtual, so this intentionally
         hides it for AudioStream call sites.
     */
-    void setProcessor (AudioProcessor* processor)
+    void setProcessor (AudioProcessor* processorToSet)
     {
         if (currentGraph != nullptr)
+        {
             currentGraph->removeChangeListener (this);
+            if (currentGraph->getPlayHead() == &transportPlayHead)
+                currentGraph->setPlayHead (nullptr);
+        }
 
-        AudioProcessorPlayer::setProcessor (processor);
-        currentGraph = dynamic_cast<AudioProcessorGraph*> (processor);
+        AudioProcessorPlayer::setProcessor (processorToSet);
+        currentGraph = dynamic_cast<AudioProcessorGraph*> (processorToSet);
 
         if (currentGraph != nullptr)
         {
+            currentGraph->setPlayHead (&transportPlayHead);
             currentGraph->addChangeListener (this);
             ensureMidiInputNode();
         }
@@ -99,12 +121,22 @@ public:
                                            int numSamples,
                                            const AudioIODeviceCallbackContext& context) override
     {
+        transportPlayHead.setBlockPosition (transportSamples.load(), transportPpq.load());
         AudioProcessorPlayer::audioDeviceIOCallbackWithContext (inputChannelData,
                                                                  numInputChannels,
                                                                  outputChannelData,
                                                                  numOutputChannels,
                                                                  numSamples,
                                                                  context);
+        const auto bpm = defaultBpm.load();
+        if (bpm > 0.0)
+        {
+            const auto rate = sampleRate.load();
+            transportSamples.fetch_add (numSamples);
+            if (rate > 0.0)
+                transportPpq.store (transportPpq.load() + (double) numSamples * bpm / (rate * 60.0));
+        }
+
         int rem = remainingSamples.load();
         if (rem > 0)
         {
@@ -205,6 +237,14 @@ public:
             setGainImmediately (1.0f);
     }
 
+    /** Attach the graph with output muted while an old graph sequence drains. */
+    void resumeMuted (AudioDeviceManager& dm, AudioProcessorGraph& graph)
+    {
+        setProcessor (&graph);
+        setGainImmediately (0.0f);
+        dm.addAudioCallback (this);
+    }
+
     //==============================================================================
     /** Set the gain immediately (no ramp). */
     void setGainImmediately (float gain)
@@ -217,6 +257,42 @@ public:
     }
 
 private:
+    class TransportPlayHead final : public AudioPlayHead
+    {
+    public:
+        explicit TransportPlayHead (const AudioStream& streamIn) : stream (streamIn) {}
+
+        void setBlockPosition (int64_t samples, double ppq) noexcept
+        {
+            blockSamples.store (samples);
+            blockPpq.store (ppq);
+        }
+
+    private:
+        Optional<PositionInfo> getPosition() const override
+        {
+            PositionInfo position;
+            const auto samples = blockSamples.load();
+            const auto rate = stream.sampleRate.load();
+            const auto bpm = stream.defaultBpm.load();
+            const auto seconds = rate > 0.0 ? (double) samples / rate : 0.0;
+
+            position.setTimeInSamples (samples);
+            position.setTimeInSeconds (seconds);
+            position.setPpqPosition (blockPpq.load());
+            position.setTimeSignature (TimeSignature { 4, 4 });
+            position.setIsPlaying (bpm > 0.0);
+            if (bpm > 0.0)
+                position.setBpm (bpm);
+
+            return position;
+        }
+
+        const AudioStream& stream;
+        std::atomic<int64_t> blockSamples { 0 };
+        std::atomic<double> blockPpq { 0.0 };
+    };
+
     //==============================================================================
     void changeListenerCallback (ChangeBroadcaster* source) override
     {
@@ -246,6 +322,10 @@ private:
     bool updatingMidiRouting = false;
 
     std::atomic<double> sampleRate{ 44100.0 };
+    std::atomic<double> defaultBpm{ 0.0 };
+    std::atomic<int64_t> transportSamples{ 0 };
+    std::atomic<double> transportPpq{ 0.0 };
+    TransportPlayHead transportPlayHead;
     std::atomic<float> curGain{ 1.0f };
     std::atomic<float> startGain{ 1.0f };
     std::atomic<float> targetGain{ 1.0f };

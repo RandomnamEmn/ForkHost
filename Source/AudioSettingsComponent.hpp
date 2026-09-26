@@ -25,6 +25,7 @@ using namespace juce;
     Wraps the standard AudioDeviceSelectorComponent and adds:
       - A live total-latency label (or error message if the device failed)
       - "Enable Fade In/Out" toggle (controls AudioStream::fadeEnabled)
+      - Default BPM control for the host transport (0 or less reports stopped)
 
     The AudioDeviceSelectorComponent is heap-allocated so we can set its size
     *after* construction, ensuring the internal AudioDeviceSettingsPanel does
@@ -37,7 +38,8 @@ public:
     AudioSettingsComponent (AudioDeviceManager& dm,
                             AudioStream& stream,
                             PluginChain& chain,
-                            const String& initError);
+                            const String& initError,
+                            bool midiServiceIsResponsive = true);
     ~AudioSettingsComponent() override;
 
     bool isFadeEnabled() const noexcept         { return fadeToggle.getToggleState(); }
@@ -61,8 +63,11 @@ private:
     std::unique_ptr<AudioDeviceSelectorComponent> selector;
     Label                       latencyLabel;
     ToggleButton                fadeToggle;
+    Label                       defaultBpmLabel;
+    TextEditor                  defaultBpmEditor;
 
     String                      initialisationError;
+    bool                        midiServiceIsResponsive = true;
 
     // Per-device-type state tracking (for type switching within the dialog)
     std::map<String, std::unique_ptr<XmlElement>> perTypeState;

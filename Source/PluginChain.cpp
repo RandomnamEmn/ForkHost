@@ -11,6 +11,30 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <climits>
 
+namespace
+{
+#if JUCE_DEBUG
+void writePluginLoadTrace (const String& message)
+{
+    static CriticalSection traceLock;
+    const ScopedLock lock (traceLock);
+    auto file = File::getSpecialLocation (File::tempDirectory)
+                    .getChildFile ("LightHostReforge-plugin-load.log");
+    FileOutputStream stream (file);
+
+    if (stream.openedOk())
+    {
+        stream.setPosition (file.getSize());
+        stream.writeText (Time::getCurrentTime().toISO8601 (true) + " " + message + "\n",
+                          false, false, nullptr);
+        stream.flush();
+    }
+}
+#else
+void writePluginLoadTrace (const String&) {}
+#endif
+}
+
 //==============================================================================
 PluginChain::PluginChain (AudioProcessorGraph& graphRef,
                           AudioPluginFormatManager& fmRef,
@@ -63,16 +87,54 @@ int PluginChain::add (const PluginDescription& desc)
     return (int) chain.size() - 1;
 }
 
+bool PluginChain::reload (int index)
+{
+    if (index < 0 || index >= (int) chain.size())
+        return false;
+
+    auto& slot = chain[(size_t) index];
+    if (slot.node != nullptr)
+    {
+        slot.node->getProcessor()->getStateInformation (slot.state);
+        PluginWindow::closeCurrentlyOpenWindowsFor (slot.node->nodeID);
+        graph.removeNode (slot.node->nodeID);
+        slot.node = nullptr;
+    }
+
+    slot.errorMessage.clear();
+    String errorMessage;
+    auto instance = formatManager.createPluginInstance (slot.desc,
+        graph.getSampleRate(), graph.getBlockSize(), errorMessage);
+
+    if (instance == nullptr)
+    {
+        slot.errorMessage = errorMessage.isNotEmpty()
+            ? errorMessage : "Plug-in instance creation failed";
+        connectChain();
+        return false;
+    }
+
+    instance->setNonRealtime (nonRealtime);
+    instance->setRateAndBufferSizeDetails (graph.getSampleRate(), graph.getBlockSize());
+    if (slot.hasSavedState())
+        instance->setStateInformation (slot.state.getData(), (int) slot.state.getSize());
+
+    slot.node = graph.addNode (std::move (instance), AudioProcessorGraph::NodeID (index + 1));
+    if (slot.node == nullptr)
+        slot.errorMessage = "Plug-in was created but could not be added to the audio graph";
+
+    connectChain();
+    return slot.node != nullptr;
+}
+
 bool PluginChain::remove (int index)
 {
     if (index < 0 || index >= (int) chain.size())
         return false;
 
-    fadeOut();
-
     auto& slot = chain[(size_t) index];
 
-    // Close the plugin's window before removing the node
+    // Close the plugin's window before removing the node.
     if (slot.node != nullptr)
     {
         PluginWindow::closeCurrentlyOpenWindowsFor (slot.node->nodeID);
@@ -81,7 +143,6 @@ bool PluginChain::remove (int index)
 
     chain.erase (chain.begin() + index);
     connectChain();
-    fadeIn();
     return true;
 }
 
@@ -146,6 +207,22 @@ void PluginChain::clear()
     chain.clear();
 }
 
+bool PluginChain::moveTo (int fromIndex, int toIndex)
+{
+    if (fromIndex < 0 || fromIndex >= (int) chain.size()
+        || toIndex < 0 || toIndex >= (int) chain.size()
+        || fromIndex == toIndex)
+        return false;
+
+    fadeOut();
+    auto slot = std::move (chain[(size_t) fromIndex]);
+    chain.erase (chain.begin() + fromIndex);
+    chain.insert (chain.begin() + toIndex, std::move (slot));
+    connectChain();
+    fadeIn();
+    return true;
+}
+
 //==============================================================================
 
 void PluginChain::fadeOut()
@@ -202,24 +279,16 @@ int PluginChain::getTotalPluginLatencySamples() const
 
 void PluginChain::loadAll()
 {
-    // Assumes audio is paused and the chain has been cleared
-    // (PluginWindow::closeAllCurrentlyOpenWindows was already called
-    // in clear()).  Just reset the graph — old nodes are gone.
-    graph.clear();
-
-    const AudioProcessorGraph::NodeID INPUT (1000000);
-    const AudioProcessorGraph::NodeID OUTPUT (INPUT.uid + 1);
-
-    // Rebuild IO nodes
-    graph.addNode (std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor>(
-        AudioProcessorGraph::AudioGraphIOProcessor::audioInputNode), INPUT);
-    graph.addNode (std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor>(
-        AudioProcessorGraph::AudioGraphIOProcessor::audioOutputNode), OUTPUT);
+    writePluginLoadTrace ("loadAll begin, slots=" + String ((int) chain.size()));
+    prepareEmptyGraph();
 
     // Build plugin nodes
     for (int i = 0; i < (int) chain.size(); i++)
     {
         auto& slot = chain[(size_t) i];
+        writePluginLoadTrace ("slot " + String (i) + " " + slot.desc.name
+                              + " create begin, savedStateBytes="
+                              + String ((int) slot.state.getSize()));
 
         // Skip previously failed plugins
         if (slot.isFailed())
@@ -231,6 +300,10 @@ void PluginChain::loadAll()
         String errorMessage;
         auto instance = formatManager.createPluginInstance (slot.desc,
             graph.getSampleRate(), graph.getBlockSize(), errorMessage);
+
+        writePluginLoadTrace ("slot " + String (i) + " " + slot.desc.name
+                              + " create returned, success=" + (instance != nullptr ? "yes" : "no")
+                              + (errorMessage.isNotEmpty() ? ", error=" + errorMessage : String()));
 
         if (instance == nullptr)
         {
@@ -245,17 +318,42 @@ void PluginChain::loadAll()
         // Restore saved state if available
         if (slot.hasSavedState())
         {
-            instance->setStateInformation (slot.state.getData(), slot.state.getSize());
+            writePluginLoadTrace ("slot " + String (i) + " " + slot.desc.name
+                                  + " setStateInformation begin");
+            instance->setStateInformation (slot.state.getData(), (int) slot.state.getSize());
+            writePluginLoadTrace ("slot " + String (i) + " " + slot.desc.name
+                                  + " setStateInformation returned");
         }
         // Note: slot.state intentionally NOT re-captured here.  The state
         // decoded from the preset XML is retained as-is; the next persistence
         // operation captures current processor state before serialising.
 
+        writePluginLoadTrace ("slot " + String (i) + " " + slot.desc.name + " addNode begin");
         slot.node = graph.addNode (std::move (instance),
             AudioProcessorGraph::NodeID (i + 1));
+        writePluginLoadTrace ("slot " + String (i) + " " + slot.desc.name + " addNode returned");
     }
 
     // Reconnect
+    writePluginLoadTrace ("connectChain begin");
+    connectChain();
+    writePluginLoadTrace ("loadAll complete");
+}
+
+void PluginChain::prepareEmptyGraph()
+{
+    // Assumes audio is paused. Installing this empty topology lets the audio
+    // thread adopt it and retire the old render sequence before a preset
+    // creates another instance of the same plug-in.
+    graph.clear();
+
+    const AudioProcessorGraph::NodeID INPUT (1000000);
+    const AudioProcessorGraph::NodeID OUTPUT (INPUT.uid + 1);
+
+    graph.addNode (std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor>(
+        AudioProcessorGraph::AudioGraphIOProcessor::audioInputNode), INPUT);
+    graph.addNode (std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor>(
+        AudioProcessorGraph::AudioGraphIOProcessor::audioOutputNode), OUTPUT);
     connectChain();
 }
 

@@ -17,10 +17,12 @@
 #include "AudioStream.hpp"
 #include "LoopbackCaptureDevice.hpp"
 #include "HostOptions.hpp"
+#include "IsolatedPluginScanner.hpp"
 
 using namespace juce;
 
 class PluginChain;
+class AudioSettingsComponent;
 
 // Emoji UTF-8 byte sequences for plugin status indicators
 constexpr const char* bypassedPluginEmoji    = "\xe2\x9a\xaa"; // ⚪ U+26AA
@@ -35,18 +37,32 @@ public:
     explicit IconMenu (const HostOptions& options = {});
     ~IconMenu();
     void mouseDown(const MouseEvent&);
+    void openMainWindow();
     static void menuInvocationCallback(int id, IconMenu*);
     void changeListenerCallback(ChangeBroadcaster* changed);
 
     PluginChain& getPluginChain() const { return *pluginChain; }
     PresetManager* getPresetManager() const { return presetManager.get(); }
+    AudioDeviceManager& getDeviceManagerForUi() { return deviceManager; }
+    AudioStream& getAudioStreamForUi() { return player; }
+    String getLastDeviceError() const { return lastDeviceError; }
+    bool isMidiServiceResponsive() const { return midiServiceResponsive; }
 
     void saveCurrentPreset();
+    void saveCurrentPresetAs();
     void markPresetDirty();
+    void createNewPreset();
+    void persistAudioSettings (const AudioSettingsComponent&);
+    void loadPresetFile (const File& file);
+    void openPluginEditor (int index);
+    void reloadPlugins();
 
     void togglePluginBypass(int timeSortedIndex);
+    void reloadPluginAt (int timeSortedIndex);
+    void removePluginAt(int timeSortedIndex);
     void movePluginUp(int timeSortedIndex);
     void movePluginDown(int timeSortedIndex);
+    void movePluginTo(int fromIndex, int toIndex);
     bool isBypassed(int timeSortedIndex);
 
     /** Process a fixed number of silent blocks on the message thread.
@@ -62,11 +78,10 @@ public:
 
 private:
     void timerCallback();
-    void reloadPlugins();
+    void refreshMainWindow();
     void showAudioSettings();
     void setIcon();
     bool loadPluginRequest (const PluginLaunchRequest& request, String& errorMessage);
-    void openPluginEditor (int index);
     void applyStartupOptions();
 
     HostOptions hostOptions;
@@ -74,6 +89,7 @@ private:
     AudioDeviceManager deviceManager;
     AudioPluginFormatManager formatManager;
     KnownPluginList knownPluginList;
+    std::shared_ptr<PluginScanLog> pluginScanLog;
     KnownPluginList::SortMethod pluginSortMethod;
     PopupMenu menu;
     bool menuIconLeftClicked;
@@ -92,12 +108,16 @@ private:
     bool deviceRecentlyRecovered = false;
     int  deviceRecoveryRetryCount = 0;
     String lastDeviceError;
+    bool midiServiceResponsive = true;
 
     void triggerAudioDeviceRecovery();
 
     class PluginListWindow;
     std::unique_ptr<PluginListWindow> pluginListWindow;
-    StringArray presetFilePaths;
+    class PluginRackComponent;
+    class PresetBrowserComponent;
+    class MainWindow;
+    std::unique_ptr<MainWindow> mainControlWindow;
 };
 
 #endif /* IconMenu_hpp */

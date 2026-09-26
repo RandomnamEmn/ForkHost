@@ -1,6 +1,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "IconMenu.hpp"
 #include "HostOptions.hpp"
+#include "IsolatedPluginScanner.hpp"
+#include "AudioDeviceInitHelpers.hpp"
 #include <iostream>
 
 #if ! (JUCE_PLUGINHOST_VST || JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
@@ -14,6 +16,21 @@ public:
 
     void initialise (const String&) override
     {
+        const auto commandLine = getCommandLineParameterArray();
+        if (AudioDeviceInitHelpers::isMidiProbeHelperCommandLine (commandLine))
+        {
+            setApplicationReturnValue (AudioDeviceInitHelpers::runMidiProbeHelper());
+            quit();
+            return;
+        }
+
+        if (isPluginScanHelperCommandLine (commandLine))
+        {
+            setApplicationReturnValue (runPluginScanHelper (commandLine));
+            quit();
+            return;
+        }
+
         auto parsed = parseCommandLine();
 
         if (parsed.showHelp)
@@ -55,6 +72,7 @@ public:
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
         mainWindow = std::make_unique<IconMenu> (parsed.options);
+        mainWindow->openMainWindow();
         #if JUCE_MAC || JUCE_LINUX
             Process::setDockIconVisible(false);
         #endif
@@ -77,6 +95,12 @@ public:
 
     bool moreThanOneInstanceAllowed() override
     {
+        if (hasFlag ("--internal-plugin-scan-helper"))
+            return true;
+
+        if (hasFlag (AudioDeviceInitHelpers::midiProbeHelperArgument))
+            return true;
+
         // Debug sessions are intentionally isolated and are commonly launched
         // while a normal Light Host instance is already running.
         if (hasFlag ("--debug"))

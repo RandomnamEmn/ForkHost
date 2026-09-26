@@ -42,18 +42,29 @@ public:
     void updateTitleAndToolbar();
     void forceToFront();
     void toggleAlwaysOnTop();
+    void setEditorScaleFactor (float scale);
+    float getEditorScaleFactor() const noexcept { return editorScaleFactor; }
+    bool editorScaleChangesBounds() const noexcept { return editorScaleChangesComponentBounds; }
     void updateSizeFromEditor();
     IconMenu* getIconMenu() const      { return iconMenu; }
     int getChainPosition() const       { return chainPosition; }
     Component* getEditorComponent() const;
 
 private:
+    void applyEditorScaleFactor (float scale, bool persist);
+    String getEditorScalePropertyKey() const;
+
     AudioProcessorGraph::Node::Ptr owner;
     WindowFormatType type;
     IconMenu* iconMenu = nullptr;
     int chainPosition = -1;
     int editorPrefW;
     int editorPrefH;
+    int unscaledEditorWidth;
+    int unscaledEditorHeight;
+    float editorScaleFactor = 1.0f;
+    bool editorScaleChangesComponentBounds = false;
+    bool allowAutomaticUpscale = true;
 
     friend class ::EditorResizeListener;
     std::unique_ptr<ComponentListener> editorResizeListener;

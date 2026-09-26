@@ -4,24 +4,31 @@ Light Host Reforge
 A fork of [LightHost](https://github.com/opencma/LightHost) with the following changes:
 
 - Ported to JUCE8
+- Added VST2 and VST3 plug-in hosting
 - Added support for Waves plugins (tested with Waves V15)
-- Added effect chain preset system
+- Added plug-in scanning for standard and custom folders, with isolated helpers for crash-prone plug-ins
+- Added effect-chain presets and saves the current rack when the app closes
+- Added a main window for plug-in management, presets, and audio/MIDI settings
 - Added plugin window toolbar
 - Added Loopback audio device type, capable of capturing desktop audio into the effect chain (Windows only, no output support)
 - Added MIDI input support for hosted instrument plugins
+- Added timed helper-process checks for Windows MIDI responsiveness and plug-in scanning
+- Added a default BPM option for plug-ins that need a continuously advancing host transport
 - Support for resizing plugin windows, partial HiDPI support
 - Support for keeping plugin windows on top
-- Added plugin bypass status display
+- Added plug-in bypass and latency status
 - Added fade-in/fade-out transition when audio chain changes
-- Added display of plugin latency and total chain latency
+- Added plug-in scan failure and helper stack-trace logs on Windows
 - Changed to CMake build system
 - Added release builds for Windows x64, macOS Apple Silicon, and macOS Intel
 
 Notes:
 
-- VST2 hosting is currently disabled
-- AU hosting is enabled on macOS; VST3 hosting is enabled on Windows and macOS
+- VST2 hosting is opt-in for local builds when a VST2 SDK is available; VST3 hosting is enabled on Windows and macOS
+- AU hosting is enabled on macOS
 - Windows loopback capture remains Windows-only
+- If the Windows MIDI check times out, MIDI device restoration is skipped for that run
+- Windows plug-in scan failures and timed-out helper thread stacks are logged to `%APPDATA%\Light Host\PluginScanFailures.log` and `PluginScanStackTraces.log`
 - macOS release artifacts are currently unsigned and unnotarized
 
 ## Install lhc
@@ -47,6 +54,22 @@ The installer downloads the matching asset from the latest GitHub release and in
 Set `LHC_INSTALL_DIR` to override the destination. Re-run the same command to update.
 
 ## Build
+
+VST2 hosting is disabled by default because JUCE requires separately supplied VST2
+SDK headers. To enable it for a local build, use a VST2 SDK that you are authorized
+to use and set `LIGHTHOST_ENABLE_VST2_HOST` plus `LIGHTHOST_VST2_SDK_PATH` when
+configuring CMake:
+
+```powershell
+cmake -S . -B build `
+  -DCMAKE_TOOLCHAIN_FILE=path\to\vcpkg.cmake `
+  -DLIGHTHOST_ENABLE_VST2_HOST=ON `
+  -DLIGHTHOST_VST2_SDK_PATH="C:\path\to\VST2_SDK"
+```
+
+The SDK is not included in this repository. Steinberg no longer accepts new VST2
+license agreements, so builds that include VST2 support should only be distributed
+if you already have the necessary rights.
 
 Windows (using VS2022 + vcpkg):
 

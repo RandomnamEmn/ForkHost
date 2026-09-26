@@ -3,6 +3,7 @@
 #include "IconMenu.hpp"
 #include "PluginChain.hpp"
 #include <atomic>
+#include <cmath>
 
 class PluginWindow;
 static Array <PluginWindow*> activePluginWindows;
@@ -29,10 +30,7 @@ public:
         auto h = comp.getHeight();
         if (w <= 50 || h <= 50)  return;
 
-        // Resize PluginWindow so content area = editor size + toolbar
-        window.isResizingInternally = true;
-        window.setContentComponentSize (w, h + toolbarHeight);
-        window.isResizingInternally = false;
+        window.updateSizeFromEditor();
     }
 
 private:
@@ -52,6 +50,7 @@ public:
         addAndMakeVisible (moveUpButton);
         addAndMakeVisible (moveDownButton);
         addAndMakeVisible (pinButton);
+        addAndMakeVisible (scaleButton);
         addAndMakeVisible (latencyLabel);
         addAndMakeVisible (editor);
 
@@ -63,23 +62,48 @@ public:
                 pluginWindow.getIconMenu()->togglePluginBypass (pluginWindow.getChainPosition());
         };
 
-        moveUpButton.setButtonText ("Move Up");
+        moveUpButton.setButtonText ("Up");
+        moveUpButton.setTooltip ("Move up");
         moveUpButton.onClick = [this]
         {
             if (pluginWindow.getIconMenu() != nullptr)
                 pluginWindow.getIconMenu()->movePluginUp (pluginWindow.getChainPosition());
         };
 
-        moveDownButton.setButtonText ("Move Down");
+        moveDownButton.setButtonText ("Down");
+        moveDownButton.setTooltip ("Move down");
         moveDownButton.onClick = [this]
         {
             if (pluginWindow.getIconMenu() != nullptr)
                 pluginWindow.getIconMenu()->movePluginDown (pluginWindow.getChainPosition());
         };
 
-        pinButton.setButtonText ("Always On Top");
+        pinButton.setButtonText ("Pin");
+        pinButton.setTooltip ("Always on top");
         pinButton.setClickingTogglesState (true);
         pinButton.onClick = [this] { pluginWindow.toggleAlwaysOnTop(); };
+
+        scaleButton.setTooltip ("Scale plug-in editor");
+        scaleButton.onClick = [this]
+        {
+            PopupMenu menu;
+            const auto currentScale = pluginWindow.getEditorScaleFactor();
+            menu.addItem (1, "50%", true, std::abs (currentScale - 0.5f) < 0.01f);
+            menu.addItem (2, "100%", true, std::abs (currentScale - 1.0f) < 0.01f);
+            menu.addItem (3, "200%", true, std::abs (currentScale - 2.0f) < 0.01f);
+
+            auto safeThis = Component::SafePointer<ToolbarComponent> (this);
+            menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&scaleButton),
+                [safeThis] (int result)
+                {
+                    if (auto* self = safeThis.getComponent())
+                    {
+                        if (result == 1) self->pluginWindow.setEditorScaleFactor (0.5f);
+                        if (result == 2) self->pluginWindow.setEditorScaleFactor (1.0f);
+                        if (result == 3) self->pluginWindow.setEditorScaleFactor (2.0f);
+                    }
+                });
+        };
 
         // Latency display (always visible, including 0)
         int latencySamples = proc->getLatencySamples();
@@ -95,6 +119,15 @@ public:
     ~ToolbarComponent() override
     {
         proc->removeListener (this);
+
+        // addAndMakeVisible() only attaches a child component; it does not
+        // transfer ownership.  Editors returned by createEditorIfNeeded()
+        // remain registered with their AudioProcessor until their destructor
+        // calls editorBeingDeleted().  Destroy the editor while the processor
+        // is still alive, otherwise a removed plugin may continue delivering
+        // GUI events into a freed processor/plugin instance.
+        if (auto* audioEditor = dynamic_cast<AudioProcessorEditor*> (editor.getComponent()))
+            delete audioEditor;
     }
 
     void audioProcessorParameterChanged (AudioProcessor*, int, float) override
@@ -141,14 +174,27 @@ public:
         auto r = getLocalBounds();
         auto toolbar = r.removeFromTop (::toolbarHeight).reduced (2);
 
-        bypassButton.setBounds (toolbar.removeFromLeft (80).reduced (2));
-        moveUpButton.setBounds (toolbar.removeFromLeft (80).reduced (2));
-        moveDownButton.setBounds (toolbar.removeFromLeft (80).reduced (2));
-        pinButton.setBounds (toolbar.removeFromLeft (80).reduced (2));
-        latencyLabel.setBounds (toolbar.removeFromRight (200).reduced (2));
+        bypassButton.setBounds (toolbar.removeFromLeft (58).reduced (1));
+        moveUpButton.setBounds (toolbar.removeFromLeft (36).reduced (1));
+        moveDownButton.setBounds (toolbar.removeFromLeft (44).reduced (1));
+        pinButton.setBounds (toolbar.removeFromLeft (38).reduced (1));
+        scaleButton.setBounds (toolbar.removeFromLeft (48).reduced (1));
+
+        const auto latencyWidth = jmin (170, toolbar.getWidth());
+        const bool showLatency = latencyWidth >= 110;
+        latencyLabel.setVisible (showLatency);
+        if (showLatency)
+            latencyLabel.setBounds (toolbar.removeFromRight (latencyWidth).reduced (1));
 
         if (editor != nullptr)
-            editor->setBounds (r);
+        {
+            if (pluginWindow.editorScaleChangesBounds())
+                editor->setBounds (r);
+            else
+                editor->setBounds (0, ::toolbarHeight,
+                                   jmax (1, roundToInt ((float) r.getWidth() / pluginWindow.getEditorScaleFactor())),
+                                   jmax (1, roundToInt ((float) r.getHeight() / pluginWindow.getEditorScaleFactor())));
+        }
     }
 
     void updateButtonStates()
@@ -161,12 +207,11 @@ public:
 
         bool isBypassed = pluginWindow.getIconMenu()->isBypassed (pos);
         bypassButton.setToggleState (isBypassed, dontSendNotification);
-        bypassButton.setButtonText (isBypassed
-            ? String::fromUTF8 (bypassedPluginEmoji) + " Bypass"
-            : String::fromUTF8 (nonBypassedPluginEmoji) + " Bypass");
+        bypassButton.setButtonText (isBypassed ? "Byp" : "Bypass");
         moveUpButton.setEnabled (pos > 0);
         moveDownButton.setEnabled (pos < totalPlugins - 1);
         pinButton.setToggleState (pluginWindow.isAlwaysOnTop(), dontSendNotification);
+        scaleButton.setButtonText (String (roundToInt (pluginWindow.getEditorScaleFactor() * 100.0f)) + "%");
     }
 
     Component* getEditor() const { return editor.getComponent(); }
@@ -175,7 +220,7 @@ private:
     PluginWindow& pluginWindow;
     Component::SafePointer<Component> editor;
     AudioProcessor* proc = nullptr;
-    TextButton bypassButton, moveUpButton, moveDownButton, pinButton;
+    TextButton bypassButton, moveUpButton, moveDownButton, pinButton, scaleButton;
     Label latencyLabel;
     std::atomic<bool> pendingDirtyNotification{false};
 };
@@ -192,7 +237,9 @@ PluginWindow::PluginWindow (Component* const pluginEditor,
       type (t),
       iconMenu (menu),
       editorPrefW (prefW),
-      editorPrefH (prefH)
+      editorPrefH (prefH),
+      unscaledEditorWidth (prefW > 50 ? prefW : 400),
+      unscaledEditorHeight (prefH > 50 ? prefH : 300)
 {
     // Step 1: Set flags that affect getContentComponentBorder() FIRST
     setUsingNativeTitleBar (false);
@@ -204,7 +251,7 @@ PluginWindow::PluginWindow (Component* const pluginEditor,
         setResizable (allowResize, false);
     }
 
-    setResizeLimits (300, 200, 4096, 4096);
+    setResizeLimits (240, 160, 4096, 4096);
 
     // Step 2: Set content component
     auto* wrapper = new ToolbarComponent (*this, pluginEditor, owner->getProcessor());
@@ -261,7 +308,15 @@ PluginWindow::PluginWindow (Component* const pluginEditor,
     MessageManager::callAsync ([safeThis]
     {
         if (auto* pw = safeThis.getComponent())
+        {
+            const auto scaleKey = pw->getEditorScalePropertyKey();
+            auto* settings = getAppProperties().getUserSettings();
+
+            if (scaleKey.isNotEmpty() && settings->containsKey (scaleKey))
+                pw->setEditorScaleFactor ((float) settings->getDoubleValue (scaleKey, 1.0));
+
             pw->updateSizeFromEditor();
+        }
     });
 }
 
@@ -538,8 +593,10 @@ bool PluginWindow::keyPressed(const KeyPress& key)
 
 void PluginWindow::forceToFront()
 {
+    Process::makeForegroundProcess();
     setAlwaysOnTop (true);
     toFront (true);
+    grabKeyboardFocus();
     setAlwaysOnTop (false);
 }
 
@@ -548,6 +605,69 @@ void PluginWindow::toggleAlwaysOnTop()
     bool newState = ! isAlwaysOnTop();
     setAlwaysOnTop (newState);
     owner->properties.set (getAlwaysOnTopProp (type), newState);
+}
+
+String PluginWindow::getEditorScalePropertyKey() const
+{
+    if (iconMenu == nullptr)
+        return {};
+
+    const auto index = iconMenu->getPluginChain().getSlotIndexForNode (owner->nodeID);
+    if (index < 0 || index >= iconMenu->getPluginChain().size())
+        return {};
+
+    return getPluginKey ("editorScale", iconMenu->getPluginChain()[index].desc);
+}
+
+void PluginWindow::applyEditorScaleFactor (float scale, bool persist)
+{
+    auto* editor = dynamic_cast<AudioProcessorEditor*> (getEditorComponent());
+    if (editor == nullptr)
+        return;
+
+    scale = jlimit (0.5f, 2.0f, scale);
+    const auto oldBounds = editor->getBounds();
+    const bool previousResizingState = isResizingInternally;
+    isResizingInternally = true;
+    editor->setScaleFactor (scale);
+    isResizingInternally = previousResizingState;
+
+    const auto newBounds = editor->getBounds();
+    editorScaleFactor = scale;
+    editorScaleChangesComponentBounds = newBounds.getWidth() != oldBounds.getWidth()
+                                     || newBounds.getHeight() != oldBounds.getHeight();
+
+    if (editorScaleChangesComponentBounds)
+    {
+        unscaledEditorWidth = jmax (1, roundToInt ((float) newBounds.getWidth() / scale));
+        unscaledEditorHeight = jmax (1, roundToInt ((float) newBounds.getHeight() / scale));
+    }
+    else
+    {
+        unscaledEditorWidth = jmax (1, oldBounds.getWidth());
+        unscaledEditorHeight = jmax (1, oldBounds.getHeight());
+    }
+
+    if (auto* toolbar = dynamic_cast<ToolbarComponent*> (getContentComponent()))
+        toolbar->updateButtonStates();
+
+    if (persist)
+    {
+        allowAutomaticUpscale = false;
+        const auto scaleKey = getEditorScalePropertyKey();
+        if (scaleKey.isNotEmpty())
+        {
+            auto* settings = getAppProperties().getUserSettings();
+            settings->setValue (scaleKey, (double) scale);
+            settings->saveIfNeeded();
+        }
+    }
+}
+
+void PluginWindow::setEditorScaleFactor (float scale)
+{
+    applyEditorScaleFactor (scale, true);
+    updateSizeFromEditor();
 }
 
 void PluginWindow::updateSizeFromEditor()
@@ -572,9 +692,66 @@ void PluginWindow::updateSizeFromEditor()
     if (w <= 50 || h <= 50)
         return;
 
+    if (allowAutomaticUpscale && editorScaleFactor < 2.0f && w < 300 && h < 220)
+    {
+        applyEditorScaleFactor (2.0f, true);
+        w = editor->getWidth();
+        h = editor->getHeight();
+
+        if (w <= 50 || h <= 50)
+        {
+            w = editorPrefW;
+            h = editorPrefH;
+        }
+    }
+
+    if (editorScaleChangesComponentBounds)
+    {
+        unscaledEditorWidth = jmax (1, roundToInt ((float) w / editorScaleFactor));
+        unscaledEditorHeight = jmax (1, roundToInt ((float) h / editorScaleFactor));
+    }
+    else
+    {
+        unscaledEditorWidth = w;
+        unscaledEditorHeight = h;
+    }
+
+    const auto& displays = Desktop::getInstance().getDisplays();
+    const auto* display = displays.getDisplayForRect (getBounds());
+    const auto available = display != nullptr ? display->userArea : displays.getTotalBounds (true);
+    const auto maxEditorWidth = jmax (240, available.getWidth() - 32);
+    const auto maxEditorHeight = jmax (160, available.getHeight() - toolbarHeight - 88);
+
+    auto scaledWidth = editorScaleChangesComponentBounds
+                     ? w : roundToInt ((float) unscaledEditorWidth * editorScaleFactor);
+    auto scaledHeight = editorScaleChangesComponentBounds
+                      ? h : roundToInt ((float) unscaledEditorHeight * editorScaleFactor);
+
+    if ((scaledWidth > maxEditorWidth || scaledHeight > maxEditorHeight)
+        && editorScaleFactor > 0.5f)
+    {
+        const auto fitsAtOne = unscaledEditorWidth <= maxEditorWidth
+                            && unscaledEditorHeight <= maxEditorHeight;
+        const auto smallerScale = editorScaleFactor > 1.0f && fitsAtOne ? 1.0f : 0.5f;
+        applyEditorScaleFactor (smallerScale, true);
+
+        w = editor->getWidth();
+        h = editor->getHeight();
+        scaledWidth = editorScaleChangesComponentBounds
+                    ? w : roundToInt ((float) unscaledEditorWidth * editorScaleFactor);
+        scaledHeight = editorScaleChangesComponentBounds
+                     ? h : roundToInt ((float) unscaledEditorHeight * editorScaleFactor);
+    }
+
     isResizingInternally = true;
-    setContentComponentSize (w, h + toolbarHeight);
+    setContentComponentSize (jmin (scaledWidth, maxEditorWidth),
+                             jmin (scaledHeight, maxEditorHeight) + toolbarHeight);
     isResizingInternally = false;
+
+    const auto maxX = jmax (available.getX(), available.getRight() - getWidth());
+    const auto maxY = jmax (available.getY(), available.getBottom() - getHeight());
+    setTopLeftPosition (jlimit (available.getX(), maxX, getX()),
+                        jlimit (available.getY(), maxY, getY()));
 }
 
 Component* PluginWindow::getEditorComponent() const

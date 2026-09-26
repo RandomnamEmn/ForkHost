@@ -13,17 +13,42 @@
 #include "PluginChain.hpp"
 #include "PluginWindow.h"
 #include "AudioSettingsComponent.hpp"
+#include "AudioDeviceInitHelpers.hpp"
 #include "NoneAudioDevice.hpp"
 #include "DebugAudioDevice.hpp"
+#include "IsolatedPluginScanner.hpp"
 #include <algorithm>
 #include <iostream>
 #include <ctime>
 #include <climits>
+#include <memory>
 #if JUCE_WINDOWS
 #include "Windows.h"
 #endif
 
-class IconMenu::PluginListWindow : public DocumentWindow
+namespace
+{
+constexpr int trayOpenMainItemId = 10;
+
+void focusWindow (Component& window)
+{
+    Process::makeForegroundProcess();
+    window.setVisible (true);
+    window.setAlwaysOnTop (true);
+    window.toFront (true);
+    window.grabKeyboardFocus();
+    window.setAlwaysOnTop (false);
+}
+
+Colour getPluginIndicatorColour (bool failed, bool bypassed)
+{
+    if (bypassed) return Colour (0xff737982);
+    if (failed)   return Colour (0xffd94a4a);
+    return Colour (0xff2e9b57);
+}
+}
+
+class IconMenu::PluginListWindow : public DocumentWindow, private ListBoxModel
 {
 public:
     PluginListWindow(IconMenu& owner_, AudioPluginFormatManager& pluginFormatManager_)
@@ -38,11 +63,27 @@ public:
         optionsButton.onClick = [this] { showOptionsMenu(); };
 
         detailLabel.setText("Select a plugin", dontSendNotification);
-        treeView.setDefaultOpenness(false);
-        treeView.setRootItemVisible(false);
-        treeView.setColour(TreeView::selectedItemBackgroundColourId,
-            findColour(DirectoryContentsDisplayComponent::highlightColourId));
-        rebuildTree();
+        searchBox.setTextToShowWhenEmpty("Search plug-ins...", Colours::grey);
+        searchBox.onTextChange = [this] { filterPlugins(); };
+        sortFilter.addItem ("Name A-Z", 1);
+        sortFilter.addItem ("Format", 2);
+        sortFilter.setSelectedId (getAppProperties().getUserSettings()->getIntValue ("pluginListSortOrder", 1),
+                                  dontSendNotification);
+        sortFilter.setTooltip ("Sort plug-ins by name or group them by file format");
+        sortFilter.onChange = [this]
+        {
+            auto* settings = getAppProperties().getUserSettings();
+            settings->setValue ("pluginListSortOrder", sortFilter.getSelectedId());
+            settings->saveIfNeeded();
+            filterPlugins();
+        };
+        formatFilter.onChange = [this] { filterPlugins(); };
+        pluginListBox.setModel(this);
+        pluginListBox.setColour(ListBox::backgroundColourId,
+            findColour(DocumentWindow::backgroundColourId));
+        pluginListBox.setColour(ListBox::outlineColourId, Colours::transparentBlack);
+        pluginListBox.setRowHeight(24);
+        rebuildList();
         setResizable(true, false);
         setResizeLimits(400, 300, 800, 1500);
         setTopLeftPosition(60, 60);
@@ -71,17 +112,6 @@ public:
     }
 
 private:
-    // --- Root item (invisible, holds manufacturer groups) ---
-    class RootItem : public TreeViewItem
-    {
-    public:
-        RootItem() {}
-        bool mightContainSubItems() override { return true; }
-        int getItemHeight() const override { return 0; }
-        void paintItem(Graphics&, int, int) override {}
-        String getUniqueName() const override { return "root"; }
-    };
-
     // --- Content component for layout ---
     class ContentComponent : public Component
     {
@@ -90,8 +120,11 @@ private:
         {
             setOpaque(true);
             addAndMakeVisible(window.optionsButton);
+            addAndMakeVisible(window.sortFilter);
+            addAndMakeVisible(window.searchBox);
+            addAndMakeVisible(window.formatFilter);
             addAndMakeVisible(window.detailLabel);
-            addAndMakeVisible(window.treeView);
+            addAndMakeVisible(window.pluginListBox);
         }
 
         void paint(Graphics& g) override
@@ -102,95 +135,19 @@ private:
         void resized() override
         {
             auto r = getLocalBounds();
-            auto toolbar = r.removeFromTop(26);
+            auto toolbar = r.removeFromTop(30).reduced(2, 2);
 
-            auto btnWidth = jmin(100, toolbar.getWidth() / 3);
-            window.optionsButton.setBounds(toolbar.removeFromLeft(btnWidth).reduced(2, 2));
-            window.detailLabel.setBounds(toolbar.reduced(4, 2));
+            window.optionsButton.setBounds(toolbar.removeFromLeft(76).reduced(2));
+            window.sortFilter.setBounds(toolbar.removeFromLeft(112).reduced(2));
+            window.searchBox.setBounds(toolbar.reduced(2));
 
-            window.treeView.setBounds(r.reduced(2));
+            auto filterRow = r.removeFromTop(30).reduced(4, 2);
+            window.formatFilter.setBounds(filterRow.removeFromLeft(150).reduced(2));
+            window.detailLabel.setBounds(filterRow.reduced(4, 2));
+            window.pluginListBox.setBounds(r.reduced(2));
         }
 
     private:
-        PluginListWindow& window;
-    };
-
-    // --- Tree item classes ---
-    class ManufacturerItem : public TreeViewItem
-    {
-    public:
-        ManufacturerItem(const String& name) : mfrName(name) {}
-
-        bool mightContainSubItems() override { return true; }
-        String getUniqueName() const override { return mfrName; }
-
-        void itemClicked(const MouseEvent& e) override
-        {
-            TreeViewItem::itemClicked(e);
-            setOpen(!isOpen());
-        }
-
-        void itemDoubleClicked(const MouseEvent&) override {}
-
-        void paintItem(Graphics& g, int width, int height) override
-        {
-            if (isSelected())
-            {
-                g.fillAll(getOwnerView()->findColour(TreeView::selectedItemBackgroundColourId));
-                g.setColour(getOwnerView()->findColour(ListBox::textColourId));
-            }
-            else
-            {
-                g.setColour(getOwnerView()->findColour(ListBox::textColourId));
-            }
-            g.setFont(Font(height * 0.7f, Font::bold));
-            g.drawText(mfrName, 4, 0, width - 8, height, Justification::centredLeft, true);
-        }
-
-    private:
-        String mfrName;
-    };
-
-    class PluginItem : public TreeViewItem
-    {
-    public:
-        PluginItem(const PluginDescription& desc, PluginListWindow& w)
-            : pluginDesc(desc), window(w) {}
-
-        bool mightContainSubItems() override { return false; }
-        String getUniqueName() const override
-        {
-            return pluginDesc.name + "_" + pluginDesc.pluginFormatName + "_" + pluginDesc.version;
-        }
-
-        void paintItem(Graphics& g, int width, int height) override
-        {
-            if (isSelected())
-            {
-                g.fillAll(getOwnerView()->findColour(TreeView::selectedItemBackgroundColourId));
-                g.setColour(getOwnerView()->findColour(ListBox::textColourId));
-            }
-            else
-            {
-                g.setColour(getOwnerView()->findColour(ListBox::textColourId));
-            }
-            g.setFont(Font(height * 0.6f));
-            g.drawText(pluginDesc.name, 4, 0, width - 8, height, Justification::centredLeft, true);
-        }
-
-        void itemClicked(const MouseEvent& e) override
-        {
-            TreeViewItem::itemClicked(e);
-            window.showPluginDetails(pluginDesc);
-        }
-
-        void itemDoubleClicked(const MouseEvent& e) override
-        {
-            window.addPluginToChain(pluginDesc);
-        }
-
-    private:
-        PluginDescription pluginDesc;
         PluginListWindow& window;
     };
 
@@ -198,8 +155,49 @@ private:
     IconMenu& owner;
     AudioPluginFormatManager& pluginFormatManager;
     TextButton optionsButton;
+    ComboBox sortFilter;
+    TextEditor searchBox;
+    ComboBox formatFilter;
     Label detailLabel;
-    TreeView treeView;
+    ListBox pluginListBox;
+    std::vector<PluginDescription> allPlugins;
+    std::vector<PluginDescription> visiblePlugins;
+    StringArray filterFormatNames;
+
+    int getNumRows() override { return (int) visiblePlugins.size(); }
+
+    void paintListBoxItem(int rowNumber, Graphics& g, int width, int height, bool rowIsSelected) override
+    {
+        if (rowIsSelected)
+            g.fillAll(findColour(DirectoryContentsDisplayComponent::highlightColourId));
+
+        if (rowNumber < 0 || rowNumber >= (int) visiblePlugins.size())
+            return;
+
+        const auto& plugin = visiblePlugins[(size_t) rowNumber];
+        g.setColour(findColour(ListBox::textColourId));
+        g.setFont(Font(13.0f));
+        auto nameArea = juce::Rectangle<int>(4, 0, jmax(0, width - 90), height);
+        auto formatArea = juce::Rectangle<int>(width - 84, 0, 80, height);
+        g.drawText(plugin.name, nameArea, Justification::centredLeft, true);
+        g.setColour(findColour(Label::textColourId).withAlpha(0.72f));
+        g.drawText(getFormatDisplayName(plugin.pluginFormatName), formatArea,
+                   Justification::centredRight, true);
+    }
+
+    void selectedRowsChanged(int lastRowSelected) override
+    {
+        if (lastRowSelected >= 0 && lastRowSelected < (int) visiblePlugins.size())
+            showPluginDetails(visiblePlugins[(size_t) lastRowSelected]);
+        else
+            detailLabel.setText("Select a plug-in", dontSendNotification);
+    }
+
+    void listBoxItemDoubleClicked(int row, const MouseEvent&) override
+    {
+        if (row >= 0 && row < (int) visiblePlugins.size())
+            addPluginToChain(visiblePlugins[(size_t) row]);
+    }
 
     // --- Methods ---
     void showOptionsMenu()
@@ -208,12 +206,55 @@ private:
         menu.addItem(1, "Scan for new or updated plug-ins...");
         menu.addItem(2, "Remove dead plug-ins from list");
         menu.addItem(3, "Clear plug-in list");
+        menu.addItem(4, "Open plug-in scan log");
+        menu.addItem(5, "Clear scan results...");
 
-        menu.showMenuAsync(PopupMenu::Options(), [this](int result) {
-            if (result == 1) scanForPlugins();
-            else if (result == 2) removeDeadPlugins();
-            else if (result == 3) clearPluginList();
+        Component::SafePointer<PluginListWindow> safeThis (this);
+        menu.showMenuAsync(PopupMenu::Options(), [safeThis](int result) {
+            if (auto* self = safeThis.getComponent())
+            {
+                if (result == 1) self->scanForPlugins();
+                else if (result == 2) self->removeDeadPlugins();
+                else if (result == 3) self->clearPluginList();
+                else if (result == 4) self->openPluginScanLog();
+                else if (result == 5) self->confirmClearScanResults();
+            }
         });
+    }
+
+    void confirmClearScanResults()
+    {
+        Component::SafePointer<PluginListWindow> safeThis (this);
+        AlertWindow::showOkCancelBox (
+            AlertWindow::WarningIcon,
+            "Clear plug-in scan results?",
+            "This clears the scan failure history and captured helper stacks.",
+            "Clear", "Cancel", this,
+            ModalCallbackFunction::create ([safeThis] (int result)
+            {
+                if (result != 1)
+                    return;
+
+                if (auto* self = safeThis.getComponent())
+                    if (self->owner.pluginScanLog != nullptr
+                        && ! self->owner.pluginScanLog->clearResults())
+                        NativeMessageBox::showMessageBoxAsync (
+                            MessageBoxIconType::WarningIcon,
+                            "Could not clear scan results",
+                            "Light Host could not remove one or both scan log files.");
+            }));
+    }
+
+    void openPluginScanLog()
+    {
+        if (owner.pluginScanLog == nullptr)
+            return;
+
+        auto report = owner.pluginScanLog->getReportFile();
+        if (! report.existsAsFile())
+            report.replaceWithText ("No plug-in scan failures have been recorded yet.\n");
+
+        report.startAsProcess();
     }
 
     // --- Scan dialog ---
@@ -228,30 +269,9 @@ private:
             String saved = getAppProperties().getUserSettings()->getValue("pluginScanPaths");
             if (saved.isNotEmpty())
                 paths.addTokens(saved, ";", "");
-            if (paths.size() == 0)
-            {
-            #if JUCE_WINDOWS
-                paths.add(File::getSpecialLocation(File::globalApplicationsDirectory)
-                    .getChildFile("Common Files").getChildFile("VST3").getFullPathName());
-                paths.add(File::getSpecialLocation(File::globalApplicationsDirectory)
-                    .getChildFile("Steinberg").getChildFile("VstPlugins").getFullPathName());
-                paths.add(File::getSpecialLocation(File::globalApplicationsDirectory)
-                    .getChildFile("VstPlugins").getFullPathName());
-            #elif JUCE_MAC
-                paths.add("/Library/Audio/Plug-Ins/VST3");
-                paths.add("~/Library/Audio/Plug-Ins/VST3");
-                paths.add("/Library/Audio/Plug-Ins/VST");
-                paths.add("~/Library/Audio/Plug-Ins/VST");
-            #elif JUCE_LINUX
-                paths.add("/usr/lib/vst3");
-                paths.add("~/.vst3");
-                paths.add("/usr/lib/vst");
-                paths.add("/usr/local/lib/vst");
-                paths.add("~/.vst");
-            #endif
-            }
 
-            statusLabel.setText("Ready to scan.", dontSendNotification);
+            statusLabel.setText("Standard VST folders and any added folders will be scanned.",
+                                dontSendNotification);
             listBox.setModel(this);
             addAndMakeVisible(statusLabel);
             addAndMakeVisible(listBox);
@@ -343,8 +363,7 @@ private:
 
         void clearList()
         {
-            knownList.clear();
-            pluginWindow.rebuildTree();
+            pluginWindow.clearPluginList();
         }
 
         void runScan()
@@ -353,10 +372,18 @@ private:
             scanButton.setEnabled(false);
             scanButton.setButtonText("Scanning...");
             statusLabel.setText("Scanning...", dontSendNotification);
+            iconMenu.pluginScanLog->beginScan (knownList.getBlacklistedFiles());
 
             FileSearchPath searchPaths;
+            // Each format supplies its platform-standard locations. Custom
+            // folders remain additive instead of replacing those defaults.
+            for (int i = 0; i < formatManager.getNumFormats(); ++i)
+                if (auto* format = formatManager.getFormat(i))
+                    searchPaths.addPath(format->getDefaultLocationsToSearch());
+
             for (auto& p : paths)
                 searchPaths.add(File(p));
+            searchPaths.removeRedundantPaths();
 
             File deadMansPedal(getAppProperties().getUserSettings()
                 ->getFile().getSiblingFile("RecentlyCrashedPluginsList"));
@@ -377,10 +404,15 @@ private:
                 }
             }
 
-            statusLabel.setText("Ready to scan.", dontSendNotification);
+            iconMenu.pluginScanLog->finishScan();
+            const auto failedCount = iconMenu.pluginScanLog->getEntryCount();
+            statusLabel.setText(failedCount == 0
+                ? "Scan complete. Standard and added folders were checked."
+                : String(failedCount) + " plug-ins failed or were skipped; open Options > Open plug-in scan log.",
+                dontSendNotification);
             scanButton.setButtonText("Scan");
             scanButton.setEnabled(true);
-            pluginWindow.rebuildTree();
+            pluginWindow.rebuildList();
         }
 
         void savePaths()
@@ -409,7 +441,7 @@ private:
         opts.dialogBackgroundColour = LookAndFeel::getDefaultLookAndFeel().findColour(DocumentWindow::backgroundColourId);
         opts.resizable = false;
         opts.runModal();
-        rebuildTree();
+        rebuildList();
     }
 
     void removeDeadPlugins()
@@ -422,44 +454,109 @@ private:
                     owner.knownPluginList.removeType(*desc);
             }
         }
-        rebuildTree();
+        rebuildList();
     }
 
     void clearPluginList()
     {
         owner.knownPluginList.clear();
-        rebuildTree();
+        owner.knownPluginList.clearBlacklistedFiles();
+        auto settingsFile = getAppProperties().getUserSettings()->getFile();
+        settingsFile.getSiblingFile("RecentlyCrashedPluginsList").deleteFile();
+        rebuildList();
     }
 
-    void rebuildTree()
+    void rebuildList()
     {
-        auto* root = static_cast<TreeViewItem*>(treeView.getRootItem());
-        if (root != nullptr)
-            root->clearSubItems();
-        else
-        {
-            root = new RootItem();
-            treeView.setRootItem(root);
-        }
-
-        std::map<String, std::vector<PluginDescription>> byMfr;
-        for (int i = 0; i < owner.knownPluginList.getNumTypes(); i++)
+        const auto selectedFormat = getFormatNameForItem(formatFilter.getSelectedItemIndex());
+        allPlugins.clear();
+        for (int i = 0; i < owner.knownPluginList.getNumTypes(); ++i)
         {
             if (auto* desc = owner.knownPluginList.getType(i))
-                byMfr[desc->manufacturerName].push_back(*desc);
+                allPlugins.push_back(*desc);
         }
 
-        for (auto& pair : byMfr)
+        StringArray formats;
+        for (int i = 0; i < pluginFormatManager.getNumFormats(); ++i)
+            if (auto* format = pluginFormatManager.getFormat(i))
+                formats.addIfNotAlreadyThere(format->getName());
+        for (const auto& plugin : allPlugins)
+            formats.addIfNotAlreadyThere(plugin.pluginFormatName);
+        formats.sort(true);
+
+        formatFilter.onChange = nullptr;
+        formatFilter.clear(dontSendNotification);
+        formatFilter.addItem("All formats", 1);
+        filterFormatNames = formats;
+        for (int i = 0; i < formats.size(); ++i)
+            formatFilter.addItem(getFormatDisplayName(formats[i]), i + 2);
+        int selectedId = 1;
+        // Restore the format by its visible text when possible.
+        for (int i = 0; i < formatFilter.getNumItems(); ++i)
+            if (getFormatNameForItem(i) == selectedFormat)
+                selectedId = formatFilter.getItemId(i);
+        formatFilter.setSelectedId(selectedId, dontSendNotification);
+        formatFilter.onChange = [this] { filterPlugins(); };
+        filterPlugins();
+    }
+
+    void filterPlugins()
+    {
+        const auto selectedFormat = getFormatNameForItem(formatFilter.getSelectedItemIndex());
+        const auto query = searchBox.getText().trim();
+        visiblePlugins.clear();
+        for (const auto& plugin : allPlugins)
         {
-            std::sort(pair.second.begin(), pair.second.end(),
-                [](const PluginDescription& a, const PluginDescription& b) {
-                    return a.name.compareIgnoreCase(b.name) < 0;
-                });
-            auto* mfrItem = new ManufacturerItem(pair.first);
-            for (auto& plugin : pair.second)
-                mfrItem->addSubItem(new PluginItem(plugin, *this));
-            root->addSubItem(mfrItem);
+            if (selectedFormat.isNotEmpty() && plugin.pluginFormatName != selectedFormat)
+                continue;
+
+            if (query.isNotEmpty()
+                && !plugin.name.containsIgnoreCase(query)
+                && !plugin.manufacturerName.containsIgnoreCase(query))
+                continue;
+
+            visiblePlugins.push_back(plugin);
         }
+
+        // Sort the final filtered rows, so changing sort order always affects
+        // the exact collection that ListBox paints.
+        const bool sortByFormat = sortFilter.getSelectedId() == 2;
+        std::stable_sort (visiblePlugins.begin(), visiblePlugins.end(),
+            [sortByFormat] (const PluginDescription& a, const PluginDescription& b)
+            {
+                if (sortByFormat)
+                {
+                    const auto formatComparison = a.pluginFormatName.compareIgnoreCase (b.pluginFormatName);
+                    if (formatComparison != 0)
+                        return formatComparison < 0;
+                }
+
+                const auto nameComparison = a.name.compareIgnoreCase (b.name);
+                if (nameComparison != 0)
+                    return nameComparison < 0;
+
+                return sortByFormat
+                    ? a.pluginFormatName.compareIgnoreCase (b.pluginFormatName) < 0
+                    : a.manufacturerName.compareIgnoreCase (b.manufacturerName) < 0;
+            });
+
+        pluginListBox.updateContent();
+        pluginListBox.repaint();
+        pluginListBox.deselectAllRows();
+        detailLabel.setText("" + String(visiblePlugins.size()) + " plug-ins", dontSendNotification);
+    }
+
+    static String getFormatDisplayName(const String& formatName)
+    {
+        return formatName == "VST" ? "VST2" : formatName;
+    }
+
+    String getFormatNameForItem(int itemIndex) const
+    {
+        if (itemIndex <= 0 || itemIndex > filterFormatNames.size())
+            return {};
+
+        return filterFormatNames[itemIndex - 1];
     }
 
     void showPluginDetails(const PluginDescription& desc)
@@ -476,10 +573,395 @@ private:
         auto safeOwner = Component::SafePointer<IconMenu>(&owner);
         MessageManager::callAsync([safeOwner]() {
             if (auto* ownerPtr = safeOwner.getComponent())
+            {
                 ownerPtr->pluginListWindow = nullptr;
+                ownerPtr->refreshMainWindow();
+            }
         });
     }
 };
+
+class IconMenu::PluginRackComponent : public Component,
+                                      public DragAndDropTarget,
+                                      private ListBoxModel
+{
+    class RackRow : public Component
+    {
+        class BypassDot : public Component, public SettableTooltipClient
+        {
+        public:
+            explicit BypassDot (RackRow& row_) : row (row_) {}
+            void setStatus (bool shouldBeBypassed, bool hasFailed)
+            {
+                bypassed = shouldBeBypassed;
+                failed = hasFailed;
+                repaint();
+            }
+            void paint (Graphics& g) override
+            {
+                auto dot = getLocalBounds().toFloat().withSizeKeepingCentre (18.0f, 18.0f);
+                g.setColour (getPluginIndicatorColour (failed, bypassed));
+                g.fillEllipse (dot);
+                if (isMouseOver())
+                {
+                    g.setColour (Colours::white.withAlpha (0.45f));
+                    g.drawEllipse (dot, 1.5f);
+                }
+            }
+            void mouseDown (const MouseEvent& e) override { leftButtonWasPressed = e.mods.isLeftButtonDown(); }
+            void mouseUp (const MouseEvent& e) override
+            {
+                if (leftButtonWasPressed && e.mouseWasClicked())
+                    row.owner.icon.togglePluginBypass (row.rowIndex);
+                leftButtonWasPressed = false;
+            }
+            void mouseEnter (const MouseEvent&) override { repaint(); }
+            void mouseExit (const MouseEvent&) override { repaint(); }
+        private:
+            RackRow& row;
+            bool bypassed = false;
+            bool failed = false;
+            bool leftButtonWasPressed = false;
+        };
+
+        class RackRowMouseListener : public MouseListener
+        {
+        public:
+            explicit RackRowMouseListener (RackRow& row_) : row (row_) {}
+            void mouseDown (const MouseEvent& event) override
+            {
+                middleButtonWasPressed = event.mods.isMiddleButtonDown();
+            }
+            void mouseUp (const MouseEvent& event) override
+            {
+                if (middleButtonWasPressed && event.mouseWasClicked())
+                    row.owner.icon.reloadPluginAt (row.rowIndex);
+                middleButtonWasPressed = false;
+            }
+        private:
+            RackRow& row;
+            bool middleButtonWasPressed = false;
+        };
+
+        class DragBar : public Component
+        {
+        public:
+            explicit DragBar (RackRow& row_) : row (row_) {}
+            void paint (Graphics& g) override
+            {
+                auto bounds = getLocalBounds().toFloat();
+                g.setColour (Colour (0xff343a40));
+                g.fillRoundedRectangle (bounds, 5.0f);
+                g.setColour (Colour (0xffaeb4ba));
+                for (int i = -1; i <= 1; ++i)
+                    g.drawLine (bounds.getCentreX() + (float) i * 4.0f, bounds.getCentreY() - 5.0f,
+                                bounds.getCentreX() + (float) i * 4.0f, bounds.getCentreY() + 5.0f, 1.5f);
+            }
+            void mouseDown (const MouseEvent&) override { dragStarted = false; }
+            void mouseDrag (const MouseEvent& event) override
+            {
+                if (dragStarted || event.getDistanceFromDragStart() < 5) return;
+                if (auto* container = DragAndDropContainer::findParentDragContainerFor (&row.owner))
+                {
+                    dragStarted = true;
+                    Image dragImage (Image::ARGB, 300, 38, true);
+                    Graphics g (dragImage);
+                    g.setColour (Colour (0xff252a30));
+                    g.fillRoundedRectangle (0.0f, 0.0f, 300.0f, 38.0f, 5.0f);
+                    g.setColour (getPluginIndicatorColour (row.failed, row.bypassed));
+                    g.fillEllipse (10.0f, 11.0f, 16.0f, 16.0f);
+                    g.setColour (Colours::white);
+                    g.setFont (FontOptions (14.0f));
+                    g.drawText (row.pluginName, 36, 0, 254, 38, Justification::centredLeft, true);
+                    const Point<int> imageOffsetFromMouse (12, -19);
+                    container->startDragging ("plugin-row:" + String (row.rowIndex), this,
+                                              ScaledImage (dragImage), false, &imageOffsetFromMouse,
+                                              &event.source);
+                }
+            }
+        private:
+            RackRow& row;
+            bool dragStarted = false;
+        };
+
+    public:
+        explicit RackRow (PluginRackComponent& owner_)
+            : owner (owner_), bypassButton (*this), dragBar (*this), mouseListener (*this)
+        {
+            addAndMakeVisible (dragBar);
+            addAndMakeVisible (bypassButton);
+            addAndMakeVisible (nameLabel);
+            addMouseListener (&mouseListener, true);
+            nameLabel.setInterceptsMouseClicks (false, false);
+        }
+        void update (int index)
+        {
+            rowIndex = index;
+            if (index < 0 || index >= owner.icon.pluginChain->size()) return;
+            const auto& slot = (*owner.icon.pluginChain)[index];
+            bypassed = slot.bypassed;
+            failed = slot.isFailed();
+            pluginName = slot.desc.name;
+            bypassButton.setStatus (bypassed, failed);
+            bypassButton.setTooltip (bypassed ? "Click to enable this plug-in" : "Click to bypass this plug-in");
+            nameLabel.setText (String (index + 1) + ".  " + slot.desc.name
+                               + (slot.isFailed() ? "  (Failed)" : ""), dontSendNotification);
+        }
+        void mouseDoubleClick (const MouseEvent& event) override
+        {
+            if (event.mods.isRightButtonDown()) owner.icon.removePluginAt (rowIndex);
+            else if (event.mods.isLeftButtonDown()) owner.icon.openPluginEditor (rowIndex);
+        }
+        void paint (Graphics& g) override
+        {
+            g.setColour (Colour (0xff343a40));
+            g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (6, 4);
+            dragBar.setBounds (area.removeFromLeft (42).reduced (4, 3));
+            bypassButton.setBounds (area.removeFromLeft (32).reduced (2));
+            nameLabel.setBounds (area.reduced (6, 0));
+        }
+    private:
+        PluginRackComponent& owner;
+        int rowIndex = -1;
+        String pluginName;
+        bool bypassed = false;
+        bool failed = false;
+        BypassDot bypassButton;
+        DragBar dragBar;
+        Label nameLabel;
+        RackRowMouseListener mouseListener;
+    };
+
+public:
+    explicit PluginRackComponent (IconMenu& owner_)
+        : icon (owner_), listBox ("Active Plugins", this)
+    {
+        listBox.setRowHeight (42);
+        listBox.setColour (ListBox::backgroundColourId,
+            LookAndFeel::getDefaultLookAndFeel().findColour (DocumentWindow::backgroundColourId));
+        addButton.setButtonText ("Add plug-ins...");
+        addButton.onClick = [this] { icon.reloadPlugins(); };
+        instructions.setText ("Click the dot to bypass. Middle-click to reload. Double left-click to edit; double right-click to remove. Drag the grip to reorder.", dontSendNotification);
+        instructions.setJustificationType (Justification::centredLeft);
+        addAndMakeVisible (addButton);
+        addAndMakeVisible (instructions);
+        addAndMakeVisible (listBox);
+    }
+    ~PluginRackComponent() override { listBox.setModel (nullptr); }
+    bool isInterestedInDragSource (const SourceDetails& details) override
+    {
+        return details.description.toString().startsWith ("plugin-row:");
+    }
+    void itemDropped (const SourceDetails& details) override
+    {
+        if (! isInterestedInDragSource (details)) return;
+        const int from = details.description.toString().fromFirstOccurrenceOf (":", false, false).getIntValue();
+        const auto point = listBox.getLocalPoint (this, details.localPosition);
+        const int rowAtDrop = listBox.getRowContainingPosition (point.x, point.y);
+        const int rowHeight = jmax (1, listBox.getRowHeight());
+        const int insertion = rowAtDrop < 0 ? (point.y < 0 ? 0 : icon.pluginChain->size())
+            : rowAtDrop + ((point.y % rowHeight) >= rowHeight / 2 ? 1 : 0);
+        const int to = insertion > from ? insertion - 1 : insertion;
+        if (to != from) icon.movePluginTo (from, to);
+    }
+    void refresh()
+    {
+        listBox.updateContent();
+        listBox.repaint();
+    }
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (8);
+        auto toolbar = area.removeFromTop (34);
+        addButton.setBounds (toolbar.removeFromRight (142));
+        instructions.setBounds (toolbar);
+        area.removeFromTop (4);
+        listBox.setBounds (area);
+    }
+private:
+    int getNumRows() override { return icon.pluginChain->size(); }
+    void paintListBoxItem (int, Graphics&, int, int, bool) override {}
+    Component* refreshComponentForRow (int row, bool, Component* existing) override
+    {
+        auto* component = dynamic_cast<RackRow*> (existing);
+        if (component == nullptr) component = new RackRow (*this);
+        component->update (row);
+        return component;
+    }
+    IconMenu& icon;
+    ListBox listBox;
+    TextButton addButton;
+    Label instructions;
+};
+
+class IconMenu::PresetBrowserComponent : public Component, private ListBoxModel
+{
+public:
+    explicit PresetBrowserComponent (IconMenu& owner_) : owner (owner_), listBox ("Presets", this)
+    {
+        listBox.setRowHeight (28);
+        loadButton.setButtonText ("Load selected");
+        browseButton.setButtonText ("Load file...");
+        newButton.setButtonText ("New");
+        saveButton.setButtonText ("Save");
+        saveAsButton.setButtonText ("Save As...");
+        loadButton.onClick = [this] { loadSelected(); };
+        browseButton.onClick = [this] { browseForPreset(); };
+        newButton.onClick = [this] {
+            owner.createNewPreset();
+            refresh();
+        };
+        saveButton.onClick = [this] { owner.saveCurrentPreset(); refresh(); };
+        saveAsButton.onClick = [this] { owner.saveCurrentPresetAs(); refresh(); };
+        addAndMakeVisible (listBox);
+        addAndMakeVisible (loadButton);
+        addAndMakeVisible (browseButton);
+        addAndMakeVisible (newButton);
+        addAndMakeVisible (saveButton);
+        addAndMakeVisible (saveAsButton);
+        refresh();
+    }
+
+    ~PresetBrowserComponent() override { listBox.setModel (nullptr); }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced (8);
+        auto buttons = area.removeFromBottom (34);
+        newButton.setBounds (buttons.removeFromLeft (72).reduced (2));
+        saveButton.setBounds (buttons.removeFromLeft (72).reduced (2));
+        saveAsButton.setBounds (buttons.removeFromLeft (90).reduced (2));
+        browseButton.setBounds (buttons.removeFromLeft (108).reduced (2));
+        loadButton.setBounds (buttons.removeFromRight (126).reduced (2));
+        listBox.setBounds (area);
+    }
+
+    void refresh()
+    {
+        presets = PresetManager::getDefaultPresetDirectory().findChildFiles (File::findFiles, false, "*.lhp");
+        std::sort (presets.begin(), presets.end(), [] (const File& a, const File& b) {
+            return a.getFileNameWithoutExtension().compareIgnoreCase (b.getFileNameWithoutExtension()) < 0;
+        });
+        listBox.updateContent();
+        listBox.repaint();
+    }
+
+private:
+    int getNumRows() override { return presets.size(); }
+
+    void paintListBoxItem (int row, Graphics& g, int width, int height, bool selected) override
+    {
+        if (row < 0 || row >= presets.size()) return;
+        if (selected) g.fillAll (listBox.findColour (DirectoryContentsDisplayComponent::highlightColourId));
+        g.setColour (listBox.findColour (ListBox::textColourId));
+        g.drawText (presets.getReference (row).getFileNameWithoutExtension(),
+                    8, 0, width - 16, height, Justification::centredLeft, true);
+    }
+
+    void listBoxItemDoubleClicked (int row, const MouseEvent&) override
+    {
+        if (row >= 0 && row < presets.size()) owner.loadPresetFile (presets.getReference (row));
+    }
+
+    void loadSelected()
+    {
+        const int row = listBox.getSelectedRow();
+        if (row >= 0 && row < presets.size()) owner.loadPresetFile (presets.getReference (row));
+    }
+
+    void browseForPreset()
+    {
+        Process::makeForegroundProcess();
+        FileChooser chooser ("Load Preset", PresetManager::getDefaultPresetDirectory(), "*.lhp");
+        if (chooser.browseForFileToOpen()) owner.loadPresetFile (chooser.getResult());
+    }
+
+    IconMenu& owner;
+    ListBox listBox;
+    TextButton loadButton, browseButton, newButton, saveButton, saveAsButton;
+    Array<File> presets;
+};
+
+class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
+{
+    class MainContent : public Component
+    {
+    public:
+        explicit MainContent (IconMenu& host)
+            : owner (host), rack (host), presets (host),
+              audio (host.getDeviceManagerForUi(), host.getAudioStreamForUi(),
+                     host.getPluginChain(), host.getLastDeviceError(),
+                     host.isMidiServiceResponsive()),
+              tabs (TabbedButtonBar::TabsAtTop)
+        {
+            const auto background = LookAndFeel::getDefaultLookAndFeel()
+                .findColour (DocumentWindow::backgroundColourId);
+            tabs.addTab ("Active Plugins", background, &rack, false);
+            tabs.addTab ("Presets", background, &presets, false);
+            tabs.addTab ("Audio & MIDI", background, &audio, false);
+            addAndMakeVisible (tabs);
+        }
+
+        ~MainContent() override { owner.persistAudioSettings (audio); }
+
+        void resized() override { tabs.setBounds (getLocalBounds()); }
+        void refresh() { rack.refresh(); presets.refresh(); }
+        void showAudioTab() { tabs.setCurrentTabIndex (2); }
+
+    private:
+        IconMenu& owner;
+        PluginRackComponent rack;
+        PresetBrowserComponent presets;
+        AudioSettingsComponent audio;
+        TabbedComponent tabs;
+    };
+
+public:
+    explicit MainWindow (IconMenu& host)
+        : DocumentWindow ("Light Host", LookAndFeel::getDefaultLookAndFeel()
+                            .findColour (DocumentWindow::backgroundColourId),
+                          DocumentWindow::minimiseButton | DocumentWindow::closeButton),
+          owner (host)
+    {
+        setContentOwned (new MainContent (owner), true);
+        setResizable (true, true);
+        setResizeLimits (520, 360, 1400, 1000);
+        centreWithSize (860, 620);
+        setVisible (true);
+        focus();
+    }
+
+    void closeButtonPressed() override { setVisible (false); }
+
+    void focus()
+    {
+        ::focusWindow (*this);
+    }
+
+    void refresh()
+    {
+        if (auto* content = dynamic_cast<MainContent*> (getContentComponent())) content->refresh();
+    }
+
+    void showAudioTab()
+    {
+        if (auto* content = dynamic_cast<MainContent*> (getContentComponent())) content->showAudioTab();
+        focus();
+    }
+
+private:
+    IconMenu& owner;
+};
+
+void IconMenu::refreshMainWindow()
+{
+    if (mainControlWindow != nullptr)
+        mainControlWindow->refresh();
+}
 
 IconMenu::IconMenu (const HostOptions& options)
     : INDEX_EDIT(1000000), INDEX_BYPASS(2000000), INDEX_DELETE(3000000),
@@ -534,6 +1016,7 @@ IconMenu::IconMenu (const HostOptions& options)
 
     // Audio device
     auto* settings = getAppProperties().getUserSettings();
+    player.setDefaultBpm (settings->getDoubleValue ("defaultBpm", 0.0));
     String audioInitError;
 
     if (hostOptions.debugMode)
@@ -575,7 +1058,25 @@ IconMenu::IconMenu (const HostOptions& options)
             }
         }
 
-        audioInitError = deviceManager.initialise(256, 256, savedAudioState.get(), false);
+        // Finish audio-device discovery before making any Windows MIDI calls.
+        // WinMM can hold a process-wide multimedia lock while waiting for the
+        // MIDI service; probing concurrently with DirectSound discovery can
+        // deadlock both operations.
+        audioInitError = AudioDeviceInitHelpers::initialiseAudioWithoutMidi (
+            deviceManager, 256, 256, savedAudioState.get());
+
+        midiServiceResponsive = AudioDeviceInitHelpers::probeMidiService (std::chrono::seconds (1));
+
+        const auto hasSavedMidiState = savedAudioState != nullptr
+            && (savedAudioState->getChildByName ("MIDIINPUT") != nullptr
+                || savedAudioState->hasAttribute ("defaultMidiOutput")
+                || savedAudioState->hasAttribute ("defaultMidiOutputDevice"));
+
+        // Restore MIDI selections only after the isolated probe has completed.
+        // If the service timed out, keep the already-open audio device and skip
+        // all MIDI restoration for this run.
+        if (midiServiceResponsive && hasSavedMidiState)
+            audioInitError = deviceManager.initialise (256, 256, savedAudioState.get(), false);
     }
 
     if (audioInitError.isNotEmpty())
@@ -613,6 +1114,9 @@ IconMenu::IconMenu (const HostOptions& options)
         knownPluginList.recreateFromXml(*savedPluginList);
     pluginSortMethod = KnownPluginList::sortByManufacturer;
     knownPluginList.addChangeListener(this);
+    pluginScanLog = std::make_shared<PluginScanLog> (
+        getAppProperties().getUserSettings()->getFile().getSiblingFile ("PluginScanFailures.log"));
+    knownPluginList.setCustomScanner (std::make_unique<IsolatedPluginScanner> (pluginScanLog));
 
     // PluginChain: unified plugin chain management
     pluginChain = std::make_unique<PluginChain>(graph, formatManager, player,
@@ -622,10 +1126,17 @@ IconMenu::IconMenu (const HostOptions& options)
     // A direct CLI plug-in request is treated as an isolated harness unless
     // --append is specified. This keeps reverse-engineering runs deterministic.
     chainPersistenceEnabled = hostOptions.plugins.empty() || hostOptions.appendPlugins;
+    auto* userSettings = getAppProperties().getUserSettings();
+    const auto savedPluginChain = userSettings->getXmlValue ("pluginChain");
+    const bool hasSavedPluginChain = savedPluginChain != nullptr;
     if (chainPersistenceEnabled)
-        pluginChain->loadFromProperties(getAppProperties());
+        if (hasSavedPluginChain)
+            pluginChain->loadFromPresetXml (savedPluginChain.get());
 
-    if (chainPersistenceEnabled && pluginChain->size() == 0)
+    // An intentionally empty saved rack is valid. Only migrate the legacy
+    // list when this installation has no saved chain at all; otherwise old
+    // pluginListActive data would resurrect removed plugins on every launch.
+    if (chainPersistenceEnabled && ! hasSavedPluginChain)
     {
         // Old format migration — use a local KnownPluginList instead of
         // a member variable, since this migration runs only once per fresh start.
@@ -653,10 +1164,11 @@ IconMenu::IconMenu (const HostOptions& options)
         for (int i = 0; i < pluginChain->size(); i++)
         {
             auto& slot = (*pluginChain)[i];
-            getAppProperties().getUserSettings()->removeValue(getPluginKey("state", slot.desc));
-            getAppProperties().getUserSettings()->removeValue(getPluginKey("bypass", slot.desc));
+            userSettings->removeValue(getPluginKey("state", slot.desc));
+            userSettings->removeValue(getPluginKey("bypass", slot.desc));
         }
-        getAppProperties().saveIfNeeded();
+        userSettings->removeValue ("pluginListActive");
+        userSettings->saveIfNeeded();
         pluginChain->saveToProperties(getAppProperties());
     }
 
@@ -693,7 +1205,13 @@ IconMenu::IconMenu (const HostOptions& options)
     auto startupSafeThis = Component::SafePointer<IconMenu> (this);
     MessageManager::callAsync ([startupSafeThis] {
         if (auto* self = startupSafeThis.getComponent())
+        {
             self->applyStartupOptions();
+            if (! self->hostOptions.exitAfterProcess
+                && self->hostOptions.plugins.empty()
+                && self->pluginChain->size() == 0)
+                self->openMainWindow();
+        }
     });
 };
 
@@ -702,10 +1220,20 @@ IconMenu::~IconMenu()
     pluginChain->fadeOut();
     player.suspend(deviceManager);
 
-    // Save chain state before closing. Isolated CLI runs intentionally never
-    // replace the user's persisted chain.
+    // Capture the final live rack on shutdown. Keep the app's rack settings
+    // and the selected preset file in sync so the next launch and the preset
+    // browser both reflect the same plug-ins and state.
     if (pluginChain != nullptr && chainPersistenceEnabled)
+    {
         pluginChain->saveToProperties(getAppProperties());
+
+        if (presetManager != nullptr)
+        {
+            const auto currentPreset = presetManager->getCurrentPresetFile();
+            if (currentPreset.existsAsFile())
+                presetManager->savePresetToFile(currentPreset);
+        }
+    }
 
     PluginWindow::closeAllCurrentlyOpenWindows();
 }
@@ -769,104 +1297,13 @@ void IconMenu::timerCallback()
     stopTimer();
     menu.clear();
     menu.addSectionHeader(JUCEApplication::getInstance()->getApplicationName());
-    if (menuIconLeftClicked) {
-        menu.addItem(1, "Preferences");
-        menu.addSeparator();
-        menu.addSectionHeader("Active Plugins");
-        // Active plugins — directly from PluginChain (vector index = chain position)
-        {
-            for (int i = 0; i < pluginChain->size(); i++)
-            {
-                const auto& slot = (*pluginChain)[i];
-                PopupMenu options;
-                if (!slot.isFailed())
-                {
-                    bool isOpen = (slot.node != nullptr)
-                        && PluginWindow::isWindowOpenFor(slot.node->nodeID);
-                    options.addItem(INDEX_EDIT + i, "Edit", true, isOpen);
-                }
-                options.addItem(INDEX_BYPASS + i, "Bypass", true, slot.bypassed);
-                options.addSeparator();
-                options.addItem(INDEX_MOVE_UP + i, "Move Up", i > 0);
-                options.addItem(INDEX_MOVE_DOWN + i, "Move Down", i < pluginChain->size() - 1);
-                options.addSeparator();
-                options.addItem(INDEX_DELETE + i, "Delete");
-
-                // Emoji: 🔴 failed, ⚪ bypassed, 🟢 active
-                String emoji;
-                if (slot.isFailed())
-                    emoji = String::fromUTF8(failedPluginEmoji);
-                else if (slot.bypassed)
-                    emoji = String::fromUTF8(bypassedPluginEmoji);
-                else
-                    emoji = String::fromUTF8(nonBypassedPluginEmoji);
-
-                String displayText = emoji + " [" + String(i + 1) + "] " + slot.desc.name;
-
-                PopupMenu::Item item(displayText);
-                item.itemID = slot.isFailed() ? 0 : INDEX_EDIT + i;
-                item.subMenu = std::make_unique<PopupMenu>(std::move(options));
-                menu.addItem(std::move(item));
-            }
-        }
-        menu.addItem(2, "Add plugins...");
-
-        if (hostOptions.debugMode)
-        {
-            menu.addSeparator();
-            menu.addSectionHeader("Debug (offline)");
-            menu.addItem(INDEX_DEBUG_PROCESS_ONE, "Process 1 silent block");
-            menu.addItem(INDEX_DEBUG_PROCESS_HUNDRED, "Process 100 silent blocks");
-        }
-
-        // Total latency display
-
-        menu.addSeparator();
-        // Presets section
-        {
-            menu.addSectionHeader("Presets");
-            if (presetManager->getCurrentPresetFile().exists())
-                menu.addItem(1, presetManager->getCurrentPresetFile().getFileName(), false);
-            }
-            bool hasPlugins = pluginChain->size() > 0;
-            menu.addItem(INDEX_PRESET_NEW, "New", true);
-            menu.addItem(INDEX_PRESET_SAVE, presetManager->isDirty() ? "Save*" : "Save", hasPlugins);
-            menu.addItem(INDEX_PRESET_SAVE_AS, "Save As...", hasPlugins);
-
-            PopupMenu loadMenu;
-            loadMenu.addItem(INDEX_PRESET_LOAD_SELECT, "Select File...");
-            presetFilePaths.clear();
-            Array<File> presetFiles = PresetManager::getDefaultPresetDirectory()
-                .findChildFiles(File::findFiles, false, "*.lhp");
-            if (presetFiles.size() > 0)
-                loadMenu.addSeparator();
-            for (int i = 0; i < presetFiles.size(); i++)
-            {
-                presetFilePaths.add(presetFiles[i].getFullPathName());
-                bool isCurrent = (presetManager->getCurrentPresetFile().getFullPathName() == presetFilePaths[i]);
-                // Only show checkmark if the current preset is in the default directory
-                if (isCurrent)
-                {
-                    bool inDefaultDir = presetManager->getCurrentPresetFile().getParentDirectory()
-                                        == PresetManager::getDefaultPresetDirectory();
-                    isCurrent = isCurrent && inDefaultDir;
-                }
-                loadMenu.addItem(INDEX_PRESET_LOAD_FILE + i,
-                    presetFiles[i].getFileNameWithoutExtension(),
-                    true,
-                    isCurrent);
-            }
-            menu.addSubMenu("Load", loadMenu, true);
-    }
-    else
-    {
-        menu.addItem(1, "Quit");
-        menu.addSeparator();
-        menu.addItem(2, "Delete Plugin States");
+    menu.addItem (trayOpenMainItemId, "Open Light Host");
+    menu.addSeparator();
+    menu.addItem (1, "Quit");
+    menu.addItem (2, "Reset plug-in states");
 #if !JUCE_MAC
-        menu.addItem(3, "Invert Icon Color");
+    menu.addItem (3, "Invert icon color");
 #endif
-    }
 #if JUCE_MAC || JUCE_LINUX
     menu.showMenuAsync(PopupMenu::Options().withTargetComponent(this), ModalCallbackFunction::forComponent(menuInvocationCallback, this));
 #else
@@ -889,13 +1326,22 @@ void IconMenu::mouseDown(const MouseEvent& e)
 #if JUCE_MAC || JUCE_LINUX
     Process::setDockIconVisible(true);
 #endif
-    Process::makeForegroundProcess();
-    menuIconLeftClicked = e.mods.isLeftButtonDown();
-    startTimer(50);
+    if (e.mods.isRightButtonDown())
+    {
+        Process::makeForegroundProcess();
+        menuIconLeftClicked = false;
+        startTimer (50);
+    }
+    else
+    {
+        openMainWindow();
+    }
 }
 
 void IconMenu::menuInvocationCallback(int id, IconMenu* im)
 {
+    if (id == trayOpenMainItemId) { im->openMainWindow(); return; }
+
     // Right click
     if ((!im->menuIconLeftClicked))
     {
@@ -922,11 +1368,9 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
             for (int i = 0; i < im->pluginChain->size(); i++)
                 (*im->pluginChain)[i].state = MemoryBlock();
 
+            PluginWindow::closeAllCurrentlyOpenWindows();
             im->pluginChain->fadeOut();
             im->player.suspend(im->deviceManager);
-            // Close all plugin windows before rebuilding — the old
-            // instances are destroyed inside loadAll() via graph.clear()
-            PluginWindow::closeAllCurrentlyOpenWindows();
             im->pluginChain->loadAll();
             im->player.resume(im->deviceManager, im->graph);
             im->markPresetDirty();
@@ -990,20 +1434,13 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
             File result = chooser.getResult();
             im->presetManager->loadPresetFromFile(result,
                 [im] { im->pluginChain->fadeOut(); im->player.suspend(im->deviceManager); },
-                [im] { im->player.resume(im->deviceManager, im->graph); });
-        }
-        return;
-    }
-    if (id >= im->INDEX_PRESET_LOAD_FILE && id < im->INDEX_PRESET_LOAD_FILE + 1000000)
-    {
-        int index = id - im->INDEX_PRESET_LOAD_FILE;
-        if (index >= 0 && index < im->presetFilePaths.size())
-        {
-            File presetFile(im->presetFilePaths[index]);
-            if (presetFile.exists())
-                im->presetManager->loadPresetFromFile(presetFile,
-                    [im] { im->pluginChain->fadeOut(); im->player.suspend(im->deviceManager); },
-                    [im] { im->player.resume(im->deviceManager, im->graph); });
+                [im] { im->player.resume(im->deviceManager, im->graph); },
+                [im]
+                {
+                    im->player.resumeMuted (im->deviceManager, im->graph);
+                    MessageManager::getInstance()->runDispatchLoopUntil (650);
+                    im->player.suspend (im->deviceManager);
+                });
         }
         return;
     }
@@ -1025,11 +1462,7 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
         // Delete plugin
         if (id >= im->INDEX_DELETE && id < im->INDEX_DELETE + 1000000)
         {
-            int index = id - im->INDEX_DELETE;
-
-            im->pluginChain->remove(index);
-            im->presetManager->markDirty();
-            PluginWindow::updateAllTitlesAndToolbars(im);
+            im->removePluginAt (id - im->INDEX_DELETE);
         }
         // Add plugin
         else if (im->knownPluginList.getIndexChosenByMenu(id) > -1)
@@ -1212,6 +1645,41 @@ void IconMenu::openPluginEditor (int index)
         window->forceToFront();
 }
 
+void IconMenu::openMainWindow()
+{
+    if (mainControlWindow == nullptr)
+        mainControlWindow.reset (new MainWindow (*this));
+    else
+    {
+        mainControlWindow->refresh();
+        mainControlWindow->focus();
+    }
+}
+
+void IconMenu::createNewPreset()
+{
+    presetManager->newPreset (
+        [this] { pluginChain->fadeOut(); player.suspend (deviceManager); },
+        [this] { player.resume (deviceManager, graph); });
+    if (mainControlWindow != nullptr) mainControlWindow->refresh();
+}
+
+void IconMenu::loadPresetFile (const File& file)
+{
+    if (presetManager == nullptr || ! file.existsAsFile()) return;
+    presetManager->loadPresetFromFile (file,
+        [this] { pluginChain->fadeOut(); player.suspend (deviceManager); },
+        [this] { player.resume (deviceManager, graph); },
+        [this]
+        {
+            player.resumeMuted (deviceManager, graph);
+            MessageManager::getInstance()->runDispatchLoopUntil (650);
+            player.suspend (deviceManager);
+        });
+    PluginWindow::updateAllTitlesAndToolbars (this);
+    if (mainControlWindow != nullptr) mainControlWindow->refresh();
+}
+
 bool IconMenu::processDebugBlocks (int blockCount, String* errorMessage)
 {
     if (!hostOptions.debugMode)
@@ -1298,6 +1766,11 @@ void IconMenu::togglePluginBypass(int timeSortedIndex)
     if (presetManager != nullptr)
         presetManager->markDirty();
     PluginWindow::updateAllTitlesAndToolbars(this);
+    if (mainControlWindow != nullptr)
+    {
+        Component::SafePointer<MainWindow> safeWindow (mainControlWindow.get());
+        MessageManager::callAsync ([safeWindow] { if (auto* window = safeWindow.getComponent()) window->refresh(); });
+    }
 }
 
 void IconMenu::movePluginUp(int timeSortedIndex)
@@ -1313,6 +1786,53 @@ void IconMenu::movePluginDown(int timeSortedIndex)
     // See comment in movePluginUp() — same reasoning applies.
     presetManager->markDirty();
     PluginWindow::updateAllTitlesAndToolbars(this);
+}
+
+void IconMenu::reloadPluginAt (int timeSortedIndex)
+{
+    if (timeSortedIndex < 0 || timeSortedIndex >= pluginChain->size())
+        return;
+
+    pluginChain->fadeOut();
+    player.suspend (deviceManager);
+    pluginChain->reload (timeSortedIndex);
+    player.resume (deviceManager, graph);
+    markPresetDirty();
+    PluginWindow::updateAllTitlesAndToolbars (this);
+    if (mainControlWindow != nullptr)
+        mainControlWindow->refresh();
+}
+
+void IconMenu::removePluginAt (int timeSortedIndex)
+{
+    if (timeSortedIndex < 0 || timeSortedIndex >= pluginChain->size())
+        return;
+
+    if ((*pluginChain)[timeSortedIndex].node != nullptr)
+        PluginWindow::closeCurrentlyOpenWindowsFor ((*pluginChain)[timeSortedIndex].node->nodeID);
+
+    pluginChain->fadeOut();
+    player.suspend (deviceManager);
+    pluginChain->remove (timeSortedIndex);
+    player.resume (deviceManager, graph);
+    presetManager->markDirty();
+    PluginWindow::updateAllTitlesAndToolbars (this);
+    if (mainControlWindow != nullptr)
+    {
+        Component::SafePointer<MainWindow> safeWindow (mainControlWindow.get());
+        MessageManager::callAsync ([safeWindow] { if (auto* window = safeWindow.getComponent()) window->refresh(); });
+    }
+}
+
+void IconMenu::movePluginTo (int fromIndex, int toIndex)
+{
+    if (pluginChain->moveTo (fromIndex, toIndex))
+    {
+        presetManager->markDirty();
+        PluginWindow::updateAllTitlesAndToolbars (this);
+    if (mainControlWindow != nullptr)
+        mainControlWindow->refresh();
+    }
 }
 
 bool IconMenu::isBypassed(int timeSortedIndex)
@@ -1335,21 +1855,26 @@ void IconMenu::saveCurrentPreset()
     }
     else
     {
-        FileChooser chooser("Save Preset As",
-            PresetManager::getDefaultPresetDirectory().getChildFile("Untitled.lhp"),
-            "*.lhp");
-        if (chooser.browseForFileToSave(true))
-        {
-            File result = chooser.getResult();
-            presetManager->savePresetToFile(result);
-            presetManager->setCurrentPresetFile(result);
-            presetManager->clearDirty();
-            getAppProperties().getUserSettings()->setValue("currentPresetPath",
-                result.getFullPathName());
-            getAppProperties().saveIfNeeded();
-            PluginWindow::updateAllTitlesAndToolbars(this);
-        }
+        saveCurrentPresetAs();
     }
+}
+
+void IconMenu::saveCurrentPresetAs()
+{
+    if (pluginChain->size() == 0) return;
+    Process::makeForegroundProcess();
+    FileChooser chooser ("Save Preset As",
+        PresetManager::getDefaultPresetDirectory().getChildFile ("Untitled.lhp"), "*.lhp");
+    if (! chooser.browseForFileToSave (true)) return;
+
+    const auto file = chooser.getResult();
+    presetManager->savePresetToFile (file);
+    presetManager->setCurrentPresetFile (file);
+    presetManager->clearDirty();
+    getAppProperties().getUserSettings()->setValue ("currentPresetPath", file.getFullPathName());
+    getAppProperties().saveIfNeeded();
+    PluginWindow::updateAllTitlesAndToolbars (this);
+    if (mainControlWindow != nullptr) mainControlWindow->refresh();
 }
 
 void IconMenu::triggerAudioDeviceRecovery()
@@ -1370,7 +1895,9 @@ void IconMenu::triggerAudioDeviceRecovery()
     if (auto state = deviceManager.createStateXml())
     {
         deviceManager.closeAudioDevice();
-        String error = deviceManager.initialise (256, 256, state.get(), false);
+        String error = midiServiceResponsive
+            ? deviceManager.initialise (256, 256, state.get(), false)
+            : AudioDeviceInitHelpers::initialiseAudioWithoutMidi (deviceManager, 256, 256, state.get());
 
         if (error.isEmpty())
         {
@@ -1384,8 +1911,12 @@ void IconMenu::triggerAudioDeviceRecovery()
             // Persist recovered state to global
             if (auto stableState = deviceManager.createStateXml())
             {
-                getAppProperties().getUserSettings()->setValue ("audioDeviceState",
-                    stableState.get());
+                auto* userSettings = getAppProperties().getUserSettings();
+                if (! midiServiceResponsive)
+                    if (auto savedState = userSettings->getXmlValue ("audioDeviceState"))
+                        AudioDeviceInitHelpers::preserveMidiSettings (savedState.get(), *stableState);
+
+                userSettings->setValue ("audioDeviceState", stableState.get());
                 getAppProperties().getUserSettings()->saveIfNeeded();
             }
         }
@@ -1444,53 +1975,38 @@ void IconMenu::markPresetDirty()
 
 void IconMenu::showAudioSettings()
 {
-    if (hostOptions.debugMode)
+    openMainWindow();
+    if (mainControlWindow != nullptr) mainControlWindow->showAudioTab();
+}
+
+void IconMenu::persistAudioSettings (const AudioSettingsComponent& audioSettingsComp)
+{
+    auto* userSettings = getAppProperties().getUserSettings();
+    for (const auto& [type, state] : audioSettingsComp.getPerTypeState())
     {
-        NativeMessageBox::showMessageBoxAsync (
-            MessageBoxIconType::InfoIcon,
-            "Debug Mode",
-            "Audio hardware is intentionally disabled in debug mode.\n\n"
-            "Use --sample-rate and --block-size when launching Light Host CLI "
-            "to configure the synthetic debug device.");
-        return;
+        if (state == nullptr) continue;
+        const auto key = "audioDeviceState_" + type;
+        if (! midiServiceResponsive)
+            if (auto saved = userSettings->getXmlValue (key))
+                AudioDeviceInitHelpers::preserveMidiSettings (saved.get(), *state);
+        userSettings->setValue (key, state.get());
     }
 
-    AudioSettingsComponent audioSettingsComp (deviceManager, player, *pluginChain,
-                                              lastDeviceError);
-
-    DialogWindow::LaunchOptions o;
-    o.content.setNonOwned (&audioSettingsComp);
-    o.dialogTitle                   = "Audio Settings";
-    o.componentToCentreAround       = this;
-    o.escapeKeyTriggersCloseButton  = true;
-    o.useNativeTitleBar             = false;
-    o.dialogBackgroundColour        = LookAndFeel::getDefaultLookAndFeel().findColour (DocumentWindow::backgroundColourId);
-    o.resizable                     = false;
-
-    o.runModal ();
-
-    // Persist per-type state for ALL device types configured this session
-    for (auto& [type, state] : audioSettingsComp.getPerTypeState())
-    {
-        if (state)
-            getAppProperties().getUserSettings()->setValue (
-                "audioDeviceState_" + type, state.get());
-    }
-    // Also persist a snapshot of the current device to the generic key
     if (auto stateAfter = deviceManager.createStateXml())
-        getAppProperties().getUserSettings()->setValue ("audioDeviceState",
-            stateAfter.get());
-
-    // enableFade is a user preference — always persist
-    getAppProperties().getUserSettings()->setValue ("enableFade",
-        audioSettingsComp.isFadeEnabled());
-    getAppProperties().getUserSettings()->saveIfNeeded();
+    {
+        if (! midiServiceResponsive)
+            if (auto saved = userSettings->getXmlValue ("audioDeviceState"))
+                AudioDeviceInitHelpers::preserveMidiSettings (saved.get(), *stateAfter);
+        userSettings->setValue ("audioDeviceState", stateAfter.get());
+    }
+    userSettings->setValue ("enableFade", audioSettingsComp.isFadeEnabled());
+    userSettings->setValue ("defaultBpm", player.getDefaultBpm());
+    userSettings->saveIfNeeded();
 }
 
 void IconMenu::reloadPlugins()
 {
     if (pluginListWindow == nullptr)
         pluginListWindow.reset(new PluginListWindow(*this, formatManager));
-    pluginListWindow->toFront(true);
+    focusWindow (*pluginListWindow);
 }
-

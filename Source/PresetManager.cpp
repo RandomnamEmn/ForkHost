@@ -87,11 +87,16 @@ void PresetManager::savePresetToFile (File file)
 
 void PresetManager::loadPresetFromFile (File file,
                                         std::function<void()> suspendAudio,
-                                        std::function<void()> resumeAudio)
+                                        std::function<void()> resumeAudio,
+                                        std::function<void()> drainOldGraph)
 {
     auto presetXml = XmlDocument::parse (file);
     if (presetXml == nullptr || !presetXml->hasTagName ("lighthostpreset"))
         return;
+
+    // Close editors while their processors are still alive, then release graph
+    // resources before replacing the chain.
+    PluginWindow::closeAllCurrentlyOpenWindows();
 
     // Fade out and suspend audio
     suspendAudio();
@@ -126,6 +131,8 @@ void PresetManager::loadPresetFromFile (File file,
         presetXml.reset();
 
         // Rebuild graph (instantiates plugins, restores their state)
+        pluginChain.prepareEmptyGraph();
+        drainOldGraph();
         pluginChain.loadAll();
 
         // Apply window geometry to the newly-created plugin nodes
@@ -149,6 +156,8 @@ void PresetManager::loadPresetFromFile (File file,
     {
         // A valid preset with no chain represents an empty chain.
         pluginChain.clear();
+        pluginChain.prepareEmptyGraph();
+        drainOldGraph();
         pluginChain.loadAll();
     }
 
@@ -184,6 +193,7 @@ File PresetManager::getDefaultPresetDirectory()
 void PresetManager::newPreset (std::function<void()> suspendAudio,
                                std::function<void()> resumeAudio)
 {
+    PluginWindow::closeAllCurrentlyOpenWindows();
     suspendAudio();
     pluginChain.clear();
 

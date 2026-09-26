@@ -51,10 +51,13 @@ public:
         @param file              the .lhp file to load
         @param suspendAudio      callback to fade out and pause the audio thread
         @param resumeAudio       callback to restart the audio thread and fade in
+        @param drainOldGraph     callback to run an empty, muted graph until JUCE
+                                 retires the previous render sequence
     */
     void loadPresetFromFile (juce::File file,
                              std::function<void()> suspendAudio,
-                             std::function<void()> resumeAudio);
+                             std::function<void()> resumeAudio,
+                             std::function<void()> drainOldGraph);
 
     /** Return the default preset directory
         (<userAppData>/Light Host/Presets/), creating it if necessary.
