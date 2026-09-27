@@ -147,4 +147,4 @@ Pushing a tag matching `v*` runs the release workflow and publishes packaged Win
 
 ### Screenshot
 
-![ForkHost preview](Resources/LightHostReforge.png)
+![ForkHost preview](Resources/ForkHost.png)
