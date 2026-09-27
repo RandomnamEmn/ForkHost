@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(LightHostReforge VERSION 2.0.0 LANGUAGES C CXX)
+project(ForkHost VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,19 +8,37 @@ find_package(JUCE CONFIG REQUIRED)
 
 # VST2 hosting is opt-in because JUCE requires the separately-supplied VST2 SDK.
 # Do not vendor or distribute Steinberg's VST2 SDK as part of this repository.
-option(LIGHTHOST_ENABLE_VST2_HOST "Enable local VST2 plug-in hosting" OFF)
-set(LIGHTHOST_VST2_SDK_PATH "" CACHE PATH
+if(NOT FORKHOST_LEGACY_OPTIONS_MIGRATED)
+    # Preserve existing local builds when upgrading from the previous option names.
+    foreach(_option IN ITEMS ENABLE_VST2_HOST VST2_SDK_PATH BUILD_CLI CLI_KEEP_SYMBOLS)
+        set(_legacy_option "LIGHTHOST_${_option}")
+        set(_forkhost_option "FORKHOST_${_option}")
+        if(DEFINED ${_legacy_option})
+            if(_option STREQUAL "VST2_SDK_PATH")
+                set(${_forkhost_option} "${${_legacy_option}}" CACHE PATH
+                    "Migrated from the previous LightHost option name" FORCE)
+            else()
+                set(${_forkhost_option} "${${_legacy_option}}" CACHE BOOL
+                    "Migrated from the previous LightHost option name" FORCE)
+            endif()
+        endif()
+    endforeach()
+    set(FORKHOST_LEGACY_OPTIONS_MIGRATED ON CACHE INTERNAL "Legacy options migrated")
+endif()
+
+option(FORKHOST_ENABLE_VST2_HOST "Enable local VST2 plug-in hosting" OFF)
+set(FORKHOST_VST2_SDK_PATH "" CACHE PATH
     "Path to a locally available VST2 SDK (must contain pluginterfaces/vst2.x headers)")
 
-if(LIGHTHOST_ENABLE_VST2_HOST)
-    if(NOT LIGHTHOST_VST2_SDK_PATH)
+if(FORKHOST_ENABLE_VST2_HOST)
+    if(NOT FORKHOST_VST2_SDK_PATH)
         message(FATAL_ERROR
-            "LIGHTHOST_ENABLE_VST2_HOST=ON requires -DLIGHTHOST_VST2_SDK_PATH=<path to VST2 SDK>")
+            "FORKHOST_ENABLE_VST2_HOST=ON requires -DFORKHOST_VST2_SDK_PATH=<path to VST2 SDK>")
     endif()
 
-    if(NOT EXISTS "${LIGHTHOST_VST2_SDK_PATH}/pluginterfaces/vst2.x/aeffect.h")
+    if(NOT EXISTS "${FORKHOST_VST2_SDK_PATH}/pluginterfaces/vst2.x/aeffect.h")
         message(FATAL_ERROR
-            "VST2 SDK headers not found under '${LIGHTHOST_VST2_SDK_PATH}'. "
+            "VST2 SDK headers not found under '${FORKHOST_VST2_SDK_PATH}'. "
             "Expected pluginterfaces/vst2.x/aeffect.h")
     endif()
 
@@ -30,10 +48,10 @@ if(LIGHTHOST_ENABLE_VST2_HOST)
             "use a JUCE CMake package with VST2 host support")
     endif()
 
-    juce_set_vst2_sdk_path("${LIGHTHOST_VST2_SDK_PATH}")
-    set(LIGHTHOST_PLUGINHOST_VST 1)
+    juce_set_vst2_sdk_path("${FORKHOST_VST2_SDK_PATH}")
+    set(FORKHOST_PLUGINHOST_VST 1)
 else()
-    set(LIGHTHOST_PLUGINHOST_VST 0)
+    set(FORKHOST_PLUGINHOST_VST 0)
 endif()
 
 #==============================================================================
@@ -93,17 +111,17 @@ endif()
 # ListBox text color, while keeping the patch local to the JUCE source used to
 # build this host.
 if(JUCE_MODULES_DIR AND EXISTS "${JUCE_MODULES_DIR}/juce_audio_utils/gui/juce_AudioDeviceSelectorComponent.cpp")
-    set(_LIGHTHOST_JUCE_DEVICE_SELECTOR
+    set(_FORKHOST_JUCE_DEVICE_SELECTOR
         "${JUCE_MODULES_DIR}/juce_audio_utils/gui/juce_AudioDeviceSelectorComponent.cpp")
-    file(READ "${_LIGHTHOST_JUCE_DEVICE_SELECTOR}" _LIGHTHOST_JUCE_DEVICE_SELECTOR_CONTENT)
+    file(READ "${_FORKHOST_JUCE_DEVICE_SELECTOR}" _FORKHOST_JUCE_DEVICE_SELECTOR_CONTENT)
     string(REPLACE
         "g.setColour (Colours::grey);"
         "g.setColour (findColour (ListBox::textColourId));"
-        _LIGHTHOST_JUCE_DEVICE_SELECTOR_PATCHED
-        "${_LIGHTHOST_JUCE_DEVICE_SELECTOR_CONTENT}")
-    if(NOT _LIGHTHOST_JUCE_DEVICE_SELECTOR_CONTENT STREQUAL _LIGHTHOST_JUCE_DEVICE_SELECTOR_PATCHED)
+        _FORKHOST_JUCE_DEVICE_SELECTOR_PATCHED
+        "${_FORKHOST_JUCE_DEVICE_SELECTOR_CONTENT}")
+    if(NOT _FORKHOST_JUCE_DEVICE_SELECTOR_CONTENT STREQUAL _FORKHOST_JUCE_DEVICE_SELECTOR_PATCHED)
         message(STATUS "Patching JUCE audio-device empty-list text to use the host theme")
-        file(WRITE "${_LIGHTHOST_JUCE_DEVICE_SELECTOR}" "${_LIGHTHOST_JUCE_DEVICE_SELECTOR_PATCHED}")
+        file(WRITE "${_FORKHOST_JUCE_DEVICE_SELECTOR}" "${_FORKHOST_JUCE_DEVICE_SELECTOR_PATCHED}")
     endif()
 endif()
 
@@ -111,13 +129,14 @@ endif()
 # Application targets
 #==============================================================================
 
-option(LIGHTHOST_BUILD_CLI "Build the console-subsystem Light Host CLI executable" ON)
-option(LIGHTHOST_CLI_KEEP_SYMBOLS
-       "Build LightHostCLI without optimisation/LTO and retain full debugger symbols" ON)
+option(FORKHOST_BUILD_CLI "Build the console-subsystem ForkHost CLI executable" ON)
+option(FORKHOST_CLI_KEEP_SYMBOLS
+       "Build ForkHostCLI without optimisation/LTO and retain full debugger symbols" ON)
 
-set(LIGHTHOST_SOURCES
+set(FORKHOST_SOURCES
     Source/HostStartup.cpp
     Source/IsolatedPluginScanner.cpp
+    Source/PluginRackWorker.cpp
     Source/IconMenu.cpp
     Source/AudioSettingsComponent.cpp
     Source/PluginChain.cpp
@@ -126,7 +145,7 @@ set(LIGHTHOST_SOURCES
 )
 
 # Binary resources are shared by the GUI and CLI-subsystem executables.
-juce_add_binary_data(LightHost_Resources
+juce_add_binary_data(ForkHost_Resources
     NAMESPACE BinaryData
     SOURCES
         Resources/icon.png
@@ -145,12 +164,12 @@ if(WIN32)
     endif()
 endif()
 
-function(configure_light_host_target target)
-    target_sources(${target} PRIVATE ${LIGHTHOST_SOURCES})
+function(configure_fork_host_target target)
+    target_sources(${target} PRIVATE ${FORKHOST_SOURCES})
 
     target_compile_definitions(${target} PRIVATE
         JUCE_PLUGINHOST_VST3=1
-        JUCE_PLUGINHOST_VST=${LIGHTHOST_PLUGINHOST_VST}
+        JUCE_PLUGINHOST_VST=${FORKHOST_PLUGINHOST_VST}
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
         JUCE_MODAL_LOOPS_PERMITTED=1
@@ -179,7 +198,7 @@ function(configure_light_host_target target)
         juce::juce_audio_utils
         juce::juce_gui_extra
         juce::juce_data_structures
-        LightHost_Resources
+        ForkHost_Resources
     )
 
     target_link_libraries(${target} PUBLIC
@@ -206,50 +225,51 @@ function(make_reverse_engineering_friendly target)
     endif()
 endfunction()
 
-juce_add_gui_app(LightHost
-    PRODUCT_NAME "Light Host"
+juce_add_gui_app(ForkHost
+    PRODUCT_NAME "ForkHost"
     COMPANY_NAME "Rolando Islas"
     COMPANY_WEBSITE "https://www.rolandoislas.com"
     COMPANY_EMAIL "admin@rolandoislas.com"
-    BUNDLE_ID "com.rolandoislas.LightHost"
+    BUNDLE_ID "com.rolandoislas.ForkHost"
     VERSION "1.2.0"
     ICON_BIG "Resources/icon.png"
     ICON_SMALL "Resources/icon.png"
 )
-configure_light_host_target(LightHost)
+configure_fork_host_target(ForkHost)
 
 # Keep the normal tray-host build optimised.
-target_link_libraries(LightHost PUBLIC
+target_link_libraries(ForkHost PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
 )
 
-if(LIGHTHOST_BUILD_CLI)
+if(FORKHOST_BUILD_CLI)
     # This is still a full JUCE GUI application and can display the real plugin
     # editor. The console subsystem only adds usable stdin/stdout/stderr when
     # launched from a terminal or debugger.
-    juce_add_console_app(LightHostCLI
-        PRODUCT_NAME "Light Host CLI"
+    juce_add_console_app(ForkHostCLI
+        PRODUCT_NAME "ForkHost CLI"
         COMPANY_NAME "Rolando Islas"
+        BUNDLE_ID "com.forkhost.cli"
         VERSION "1.2.0"
     )
-    configure_light_host_target(LightHostCLI)
-    set_target_properties(LightHostCLI PROPERTIES OUTPUT_NAME "lhc")
-    target_compile_definitions(LightHostCLI PRIVATE LIGHTHOST_CLI_BUILD=1)
+    configure_fork_host_target(ForkHostCLI)
+    set_target_properties(ForkHostCLI PROPERTIES OUTPUT_NAME "lhc")
+    target_compile_definitions(ForkHostCLI PRIVATE FORKHOST_CLI_BUILD=1)
 
-    if(LIGHTHOST_CLI_KEEP_SYMBOLS)
-        make_reverse_engineering_friendly(LightHostCLI)
+    if(FORKHOST_CLI_KEEP_SYMBOLS)
+        make_reverse_engineering_friendly(ForkHostCLI)
 
         if(APPLE)
-            add_custom_command(TARGET LightHostCLI POST_BUILD
-                COMMAND dsymutil "$<TARGET_FILE:LightHostCLI>"
-                        -o "$<TARGET_FILE:LightHostCLI>.dSYM"
-                COMMENT "Generating full dSYM for LightHostCLI"
+            add_custom_command(TARGET ForkHostCLI POST_BUILD
+                COMMAND dsymutil "$<TARGET_FILE:ForkHostCLI>"
+                        -o "$<TARGET_FILE:ForkHostCLI>.dSYM"
+                COMMENT "Generating full dSYM for ForkHostCLI"
                 VERBATIM
             )
         endif()
     else()
-        target_link_libraries(LightHostCLI PUBLIC
+        target_link_libraries(ForkHostCLI PUBLIC
             juce::juce_recommended_config_flags
             juce::juce_recommended_lto_flags
         )

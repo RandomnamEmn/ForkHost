@@ -1,6 +1,6 @@
 //
 //  PresetManager.cpp
-//  Light Host
+//  ForkHost
 //
 //  Preset file I/O implementation.
 //
@@ -72,7 +72,7 @@ void PresetManager::savePresetToFile (File file)
         }
     }
 
-    auto presetXml = std::make_unique<XmlElement> ("lighthostpreset");
+    auto presetXml = std::make_unique<XmlElement> ("forkhostpreset");
     presetXml->addChildElement (chainXml.release());
 
     FileOutputStream outStream (file);
@@ -91,7 +91,9 @@ void PresetManager::loadPresetFromFile (File file,
                                         std::function<void()> drainOldGraph)
 {
     auto presetXml = XmlDocument::parse (file);
-    if (presetXml == nullptr || !presetXml->hasTagName ("lighthostpreset"))
+    if (presetXml == nullptr
+        || (! presetXml->hasTagName ("forkhostpreset")
+            && ! presetXml->hasTagName ("lighthostpreset")))
         return;
 
     // Close editors while their processors are still alive, then release graph
@@ -178,9 +180,11 @@ void PresetManager::loadPresetFromFile (File file,
 
 File PresetManager::getDefaultPresetDirectory()
 {
-    File presetDir = File::getSpecialLocation (File::userApplicationDataDirectory)
-        .getChildFile ("Light Host")
-        .getChildFile ("Presets");
+    const auto appData = File::getSpecialLocation (File::userApplicationDataDirectory);
+    const auto presetDir = appData.getChildFile ("ForkHost").getChildFile ("Presets");
+    const auto legacyPresetDir = appData.getChildFile ("Light Host").getChildFile ("Presets");
+    if (! presetDir.exists() && legacyPresetDir.isDirectory())
+        return legacyPresetDir;
     if (!presetDir.exists())
         presetDir.createDirectory();
     return presetDir;

@@ -1,6 +1,6 @@
 //
 //  PluginChain.hpp
-//  Light Host
+//  ForkHost
 //
 //  Unified plugin effect chain management.
 //  Replaces the old activePluginList + pluginNodeIDs + getTimeSortedList() approach
@@ -20,6 +20,8 @@
 #include <vector>
 
 using namespace juce;
+
+class PluginRackWorker;
 
 //==============================================================================
 /**
@@ -59,7 +61,8 @@ public:
     PluginChain (AudioProcessorGraph& graphRef,
                  AudioPluginFormatManager& fmRef,
                  AudioStream& audioStreamRef,
-                 bool nonRealtimeMode = false);
+                 bool nonRealtimeMode = false,
+                 PluginRackWorker* rackWorker = nullptr);
 
     ~PluginChain();
 
@@ -148,6 +151,9 @@ public:
 
     /** Set a role label such as "Pre" or "Post" for one rack instance. */
     bool setInstanceLabel (int index, const String& label);
+    void setRemotePluginStatus (int index, bool loaded, const String& error);
+    void setRemotePluginState (int index, const MemoryBlock& state);
+    bool isRemote() const noexcept { return remoteWorker != nullptr; }
 
     //@}
     //==============================================================================
@@ -171,6 +177,8 @@ public:
         (tag "pluginchain" as created by createPresetXml).
     */
     void loadFromPresetXml (const XmlElement* xml);
+    /** Update rack metadata while retaining instances whose identity is unchanged. */
+    void reconcileFromPresetXml (const XmlElement* xml);
 
     void fadeOut();
     void fadeIn();
@@ -184,6 +192,7 @@ public:
 private:
     //==============================================================================
     void connectChain();
+    void notifyRemoteRackChanged();
     int64_t allocateInstanceSequence();
     void ensureInstanceSequence (PluginSlot& slot);
 
@@ -194,6 +203,8 @@ private:
     AudioPluginFormatManager&   formatManager;
     AudioStream&                audioStream;
     bool                        nonRealtime = false;
+    PluginRackWorker*           remoteWorker = nullptr;
+    AudioProcessorGraph::Node::Ptr remoteNode;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginChain)
 };

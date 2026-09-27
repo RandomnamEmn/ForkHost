@@ -1,6 +1,6 @@
 //
 //  PluginChain.cpp
-//  Light Host
+//  ForkHost
 //
 //  Unified plugin effect chain management.
 //  Replaces the old activePluginList + getTimeSortedList() approach.
@@ -8,6 +8,7 @@
 
 #include "PluginChain.hpp"
 #include "PluginWindow.h"
+#include "PluginRackWorker.hpp"
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <algorithm>
 #include <climits>
@@ -37,7 +38,7 @@ void writePluginLoadTrace (const String& message)
     static CriticalSection traceLock;
     const ScopedLock lock (traceLock);
     auto file = File::getSpecialLocation (File::tempDirectory)
-                    .getChildFile ("LightHostReforge-plugin-load.log");
+                    .getChildFile ("ForkHost-plugin-load.log");
     FileOutputStream stream (file);
 
     if (stream.openedOk())
@@ -57,9 +58,10 @@ void writePluginLoadTrace (const String&) {}
 PluginChain::PluginChain (AudioProcessorGraph& graphRef,
                           AudioPluginFormatManager& fmRef,
                           AudioStream& audioStreamRef,
-                          bool nonRealtimeMode)
+                          bool nonRealtimeMode,
+                          PluginRackWorker* rackWorker)
     : graph (graphRef), formatManager (fmRef), audioStream (audioStreamRef),
-      nonRealtime (nonRealtimeMode)
+      nonRealtime (nonRealtimeMode), remoteWorker (rackWorker)
 {
 }
 
@@ -73,6 +75,16 @@ PluginChain::~PluginChain()
 
 int PluginChain::add (const PluginDescription& desc)
 {
+    if (remoteWorker != nullptr)
+    {
+        PluginSlot slot;
+        slot.desc = desc;
+        ensureInstanceSequence (slot);
+        chain.push_back (std::move (slot));
+        notifyRemoteRackChanged();
+        return (int) chain.size() - 1;
+    }
+
     fadeOut();
 
     PluginSlot slot;
@@ -192,7 +204,22 @@ bool PluginChain::setInstanceLabel (int index, const String& label)
         cleanedLabel = cleanedLabel.substring (0, 80);
 
     chain[(size_t) index].instanceLabel = cleanedLabel;
+    notifyRemoteRackChanged();
     return true;
+}
+
+void PluginChain::setRemotePluginStatus (int index, bool loaded, const String& error)
+{
+    if (remoteWorker == nullptr || index < 0 || index >= (int) chain.size())
+        return;
+    chain[(size_t) index].errorMessage = loaded ? String() : error;
+}
+
+void PluginChain::setRemotePluginState (int index, const MemoryBlock& state)
+{
+    if (remoteWorker == nullptr || index < 0 || index >= (int) chain.size())
+        return;
+    chain[(size_t) index].state = state;
 }
 
 bool PluginChain::reload (int index)
@@ -201,6 +228,14 @@ bool PluginChain::reload (int index)
         return false;
 
     auto& slot = chain[(size_t) index];
+    if (remoteWorker != nullptr)
+    {
+        slot.errorMessage.clear();
+        if (auto xml = createPresetXml())
+            remoteWorker->replaceRack (*xml);
+        return true;
+    }
+
     auto replacementNodeId = slot.node != nullptr
         ? slot.node->nodeID
         : AudioProcessorGraph::NodeID {};
@@ -267,6 +302,14 @@ bool PluginChain::remove (int index)
 
     auto& slot = chain[(size_t) index];
 
+    if (remoteWorker != nullptr)
+    {
+        chain.erase (chain.begin() + index);
+        notifyRemoteRackChanged();
+        connectChain();
+        return true;
+    }
+
     // Close the plugin's window before removing the node.
     if (slot.node != nullptr)
     {
@@ -284,10 +327,11 @@ bool PluginChain::moveUp (int index)
     if (index <= 0 || index >= (int) chain.size())
         return false;
 
-    fadeOut();
+    if (remoteWorker == nullptr)
+        fadeOut();
     std::swap (chain[(size_t) index], chain[(size_t) (index - 1)]);
     connectChain();
-    fadeIn();
+    if (remoteWorker != nullptr) notifyRemoteRackChanged(); else fadeIn();
     return true;
 }
 
@@ -296,10 +340,11 @@ bool PluginChain::moveDown (int index)
     if (index < 0 || index >= (int) chain.size() - 1)
         return false;
 
-    fadeOut();
+    if (remoteWorker == nullptr)
+        fadeOut();
     std::swap (chain[(size_t) index], chain[(size_t) (index + 1)]);
     connectChain();
-    fadeIn();
+    if (remoteWorker != nullptr) notifyRemoteRackChanged(); else fadeIn();
     return true;
 }
 
@@ -308,13 +353,14 @@ void PluginChain::toggleBypass (int index)
     if (index < 0 || index >= (int) chain.size())
         return;
 
-    fadeOut();
+    if (remoteWorker == nullptr)
+        fadeOut();
 
     auto& slot = chain[(size_t) index];
     slot.bypassed = !slot.bypassed;
 
     connectChain();
-    fadeIn();
+    if (remoteWorker != nullptr) notifyRemoteRackChanged(); else fadeIn();
 }
 
 void PluginChain::clear()
@@ -327,15 +373,18 @@ void PluginChain::clear()
     // VST3 plugin's IPlugView retains a COM reference that prevents
     // complete teardown — those are handled in Step 2.
     PluginWindow::closeAllCurrentlyOpenWindows();
+    if (remoteWorker != nullptr)
+        remoteWorker->closeEditors();
 
     // Step 2: Explicitly delete any editors that survived window
     // closure.  The ToolbarComponent's SafePointer<Component> member
     // auto-nulls when the editor component is destroyed, so the
     // PluginWindow destructor's listener-removal path is safe even
     // when the editor has already been freed.
-    for (auto& node : graph.getNodes())
-        if (auto* editor = node->getProcessor()->getActiveEditor())
-            delete editor;
+    if (remoteWorker == nullptr)
+        for (auto& node : graph.getNodes())
+            if (auto* editor = node->getProcessor()->getActiveEditor())
+                delete editor;
 
     chain.clear();
 }
@@ -347,12 +396,13 @@ bool PluginChain::moveTo (int fromIndex, int toIndex)
         || fromIndex == toIndex)
         return false;
 
-    fadeOut();
+    if (remoteWorker == nullptr)
+        fadeOut();
     auto slot = std::move (chain[(size_t) fromIndex]);
     chain.erase (chain.begin() + fromIndex);
     chain.insert (chain.begin() + toIndex, std::move (slot));
     connectChain();
-    fadeIn();
+    if (remoteWorker != nullptr) notifyRemoteRackChanged(); else fadeIn();
     return true;
 }
 
@@ -405,6 +455,9 @@ void PluginChain::fadeIn()
 
 int PluginChain::getTotalPluginLatencySamples() const
 {
+    if (remoteWorker != nullptr)
+        return remoteNode != nullptr ? jmax (0, remoteNode->getProcessor()->getLatencySamples()) : 0;
+
     int total = 0;
     for (const auto& slot : chain)
         if (slot.node != nullptr && !slot.bypassed && !slot.isFailed())
@@ -425,6 +478,14 @@ int PluginChain::getTotalPluginLatencySamples() const
 void PluginChain::loadAll()
 {
     writePluginLoadTrace ("loadAll begin, slots=" + String ((int) chain.size()));
+    if (remoteWorker != nullptr)
+    {
+        prepareEmptyGraph();
+        if (auto xml = createPresetXml())
+            remoteWorker->replaceRack (*xml);
+        return;
+    }
+
     prepareEmptyGraph();
 
     // Build plugin nodes
@@ -499,6 +560,9 @@ void PluginChain::prepareEmptyGraph()
         AudioProcessorGraph::AudioGraphIOProcessor::audioInputNode), INPUT);
     graph.addNode (std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor>(
         AudioProcessorGraph::AudioGraphIOProcessor::audioOutputNode), OUTPUT);
+    if (remoteWorker != nullptr)
+        remoteNode = graph.addNode (std::make_unique<RemoteRackProcessor> (*remoteWorker),
+                                    AudioProcessorGraph::NodeID (1));
     connectChain();
 }
 
@@ -521,6 +585,50 @@ void PluginChain::connectChain()
             std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (
                 AudioProcessorGraph::AudioGraphIOProcessor::midiInputNode),
             MIDI_INPUT);
+    }
+
+    if (remoteWorker != nullptr)
+    {
+        // The remote proxy's graph topology does not change when rack metadata
+        // changes. Rebuilding these connections while the device callback is
+        // running would race the audio graph, so only connect on first setup
+        // after prepareEmptyGraph() has created the nodes.
+        if (! graph.getConnections().empty())
+            return;
+
+        const AudioProcessorGraph::NodeID INPUT (1000000);
+        const AudioProcessorGraph::NodeID OUTPUT (INPUT.uid + 1);
+        const AudioProcessorGraph::NodeID MIDI_INPUT (INPUT.uid + 2);
+        const AudioProcessorGraph::NodeID MIDI_OUTPUT (INPUT.uid + 3);
+        const AudioProcessorGraph::NodeID REMOTE (1);
+
+        if (graph.getNodeForId (MIDI_OUTPUT) == nullptr)
+            graph.addNode (std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor>(
+                AudioProcessorGraph::AudioGraphIOProcessor::midiOutputNode), MIDI_OUTPUT);
+
+        for (const auto& connection : graph.getConnections())
+            graph.removeConnection (connection);
+
+        const auto connect = [this] (AudioProcessorGraph::NodeID source, int sourceChannel,
+                                     AudioProcessorGraph::NodeID destination, int destinationChannel)
+        {
+            const AudioProcessorGraph::Connection connection {
+                { source, sourceChannel }, { destination, destinationChannel }
+            };
+            if (graph.canConnect (connection))
+                graph.addConnection (connection);
+        };
+
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            connect (INPUT, channel, REMOTE, channel);
+            connect (REMOTE, channel, OUTPUT, channel);
+        }
+        connect (MIDI_INPUT, AudioProcessorGraph::midiChannelIndex,
+                 REMOTE, AudioProcessorGraph::midiChannelIndex);
+        connect (REMOTE, AudioProcessorGraph::midiChannelIndex,
+                 MIDI_OUTPUT, AudioProcessorGraph::midiChannelIndex);
+        return;
     }
 
     // Remove all existing audio and MIDI connections before rebuilding both
@@ -671,7 +779,7 @@ void PluginChain::saveToProperties (ApplicationProperties& props)
     // since the last explicit preset save would be lost after a restart.
     for (auto& slot : chain)
     {
-        if (slot.node != nullptr && !slot.isFailed())
+        if (remoteWorker == nullptr && slot.node != nullptr && !slot.isFailed())
             slot.node->getProcessor()->getStateInformation (slot.state);
     }
 
@@ -761,4 +869,127 @@ void PluginChain::loadFromPresetXml (const XmlElement* xml)
         ensureInstanceSequence (slot);
         chain.push_back (std::move (slot));
     }
+}
+
+void PluginChain::reconcileFromPresetXml (const XmlElement* xml)
+{
+    jassert (xml != nullptr && xml->hasTagName ("pluginchain"));
+    if (xml == nullptr || ! xml->hasTagName ("pluginchain") || remoteWorker != nullptr)
+        return;
+
+    std::vector<PluginSlot> desired;
+    std::vector<int64_t> usedSequences;
+    int64_t nextSequence = nextInstanceSequence;
+
+    for (auto* pluginXml = xml->getFirstChildElement();
+         pluginXml != nullptr;
+         pluginXml = pluginXml->getNextElement())
+    {
+        if (! pluginXml->hasTagName ("plugin"))
+            continue;
+
+        PluginSlot slot;
+        slot.bypassed = pluginXml->getBoolAttribute ("bypassed", false);
+        slot.instanceLabel = pluginXml->getStringAttribute ("instanceLabel");
+        slot.instanceSequence = pluginXml->getStringAttribute ("instanceSequence").getLargeIntValue();
+
+        if (auto* descXml = pluginXml->getFirstChildElement())
+            if (descXml->hasTagName ("PLUGIN"))
+                slot.desc.loadFromXml (*descXml);
+
+        if (slot.desc.name.isEmpty() && pluginXml->hasAttribute ("name"))
+        {
+            slot.desc.name = pluginXml->getStringAttribute ("name");
+            slot.desc.pluginFormatName = pluginXml->getStringAttribute ("format");
+            slot.desc.version = pluginXml->getStringAttribute ("version");
+            slot.desc.fileOrIdentifier = pluginXml->getStringAttribute ("file", slot.desc.fileOrIdentifier);
+            slot.desc.uniqueId = (int) pluginXml->getIntAttribute ("uid", slot.desc.uniqueId);
+        }
+
+        if (auto* stateXml = pluginXml->getChildByName ("state"))
+        {
+            const auto encoded = stateXml->getAllSubText().trim();
+            if (encoded.isNotEmpty())
+                slot.state.fromBase64Encoding (encoded);
+        }
+
+        const auto sequenceIsInvalid = slot.instanceSequence <= 0
+            || std::find (usedSequences.begin(), usedSequences.end(), slot.instanceSequence) != usedSequences.end();
+        if (sequenceIsInvalid)
+        {
+            while (std::find (usedSequences.begin(), usedSequences.end(), nextSequence) != usedSequences.end()
+                   || nextSequence <= 0
+                   || nextSequence == std::numeric_limits<int64_t>::max())
+                ++nextSequence;
+            slot.instanceSequence = nextSequence++;
+        }
+        usedSequences.push_back (slot.instanceSequence);
+        desired.push_back (std::move (slot));
+    }
+
+    std::vector<bool> retained (chain.size(), false);
+    for (auto& nextSlot : desired)
+    {
+        for (size_t oldIndex = 0; oldIndex < chain.size(); ++oldIndex)
+        {
+            auto& oldSlot = chain[oldIndex];
+            if (retained[oldIndex] || oldSlot.node == nullptr
+                || ! isSamePluginType (oldSlot.desc, nextSlot.desc)
+                || oldSlot.instanceSequence != nextSlot.instanceSequence)
+                continue;
+
+            nextSlot.node = std::move (oldSlot.node);
+            // The live instance can be newer than the last debounced preset
+            // snapshot. Keep its state when reconciling metadata such as order
+            // or bypass so a quick edit followed by a reorder is not lost.
+            if (oldSlot.state.getSize() > 0)
+                nextSlot.state = oldSlot.state;
+            nextSlot.errorMessage.clear();
+            retained[oldIndex] = true;
+            break;
+        }
+
+        if (nextSlot.node == nullptr)
+        {
+            String error;
+            auto instance = formatManager.createPluginInstance (nextSlot.desc,
+                graph.getSampleRate(), graph.getBlockSize(), error);
+            if (instance == nullptr)
+            {
+                nextSlot.errorMessage = error.isNotEmpty() ? error : "Plug-in instance creation failed";
+                continue;
+            }
+
+            instance->setNonRealtime (nonRealtime);
+            instance->setRateAndBufferSizeDetails (graph.getSampleRate(), graph.getBlockSize());
+            if (nextSlot.hasSavedState())
+                instance->setStateInformation (nextSlot.state.getData(), (int) nextSlot.state.getSize());
+
+            nextSlot.node = graph.addNode (std::move (instance));
+            if (nextSlot.node == nullptr)
+                nextSlot.errorMessage = "Plug-in was created but could not be added to the audio graph";
+        }
+    }
+
+    for (size_t oldIndex = 0; oldIndex < chain.size(); ++oldIndex)
+    {
+        auto& oldSlot = chain[oldIndex];
+        if (! retained[oldIndex] && oldSlot.node != nullptr)
+            graph.removeNode (oldSlot.node->nodeID);
+    }
+
+    chain = std::move (desired);
+    for (const auto sequence : usedSequences)
+        if (sequence < std::numeric_limits<int64_t>::max())
+            nextSequence = jmax (nextSequence, sequence + 1);
+    nextInstanceSequence = jmax (nextSequence, nextInstanceSequence);
+    connectChain();
+}
+
+void PluginChain::notifyRemoteRackChanged()
+{
+    if (remoteWorker == nullptr)
+        return;
+    if (auto xml = createPresetXml())
+        remoteWorker->setRack (*xml);
 }

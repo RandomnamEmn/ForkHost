@@ -16,6 +16,7 @@ struct HostOptions
     bool openEditors = true;
     bool appendPlugins = false;
     bool exitAfterProcess = false;
+    bool useSeparateHelper = false;
 
     double sampleRate = 48000.0;
     int blockSize = 512;

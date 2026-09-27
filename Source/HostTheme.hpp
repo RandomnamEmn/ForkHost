@@ -9,7 +9,7 @@
  #include <windows.h>
 #endif
 
-namespace LightHostTheme
+namespace ForkHostTheme
 {
 using namespace juce;
 
@@ -249,7 +249,7 @@ inline SquareLookAndFeel& customizationLookAndFeel()
     return lookAndFeel;
 }
 
-// Custom IDs used by Light Host's own custom-painted controls.
+// Custom IDs used by ForkHost's own custom-painted controls.
 constexpr int panelBackgroundColourId = 0x2410001;
 constexpr int controlBackgroundColourId = 0x2410002;
 constexpr int secondaryTextColourId = 0x2410003;
@@ -738,4 +738,4 @@ private:
     std::vector<std::unique_ptr<Row>> rows;
 };
 
-} // namespace LightHostTheme
+} // namespace ForkHostTheme

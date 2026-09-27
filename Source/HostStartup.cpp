@@ -4,6 +4,7 @@
 #include "IsolatedPluginScanner.hpp"
 #include "AudioDeviceInitHelpers.hpp"
 #include "HostTheme.hpp"
+#include "PluginRackWorker.hpp"
 #include <iostream>
 
 #if ! (JUCE_PLUGINHOST_VST || JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
@@ -18,6 +19,14 @@ public:
     void initialise (const String&) override
     {
         const auto commandLine = getCommandLineParameterArray();
+        rackWorkerServer = std::make_unique<PluginRackWorkerServer>();
+        if (rackWorkerServer->initialiseFromCommandLine (
+                getCommandLineParameterArray().joinIntoString (" ")))
+        {
+            return;
+        }
+        rackWorkerServer.reset();
+
         if (AudioDeviceInitHelpers::isMidiProbeHelperCommandLine (commandLine))
         {
             setApplicationReturnValue (AudioDeviceInitHelpers::runMidiProbeHelper());
@@ -53,7 +62,7 @@ public:
 
         if (parsed.error.isNotEmpty())
         {
-            std::cerr << "Light Host: " << parsed.error.toStdString() << "\n\n"
+            std::cerr << "ForkHost: " << parsed.error.toStdString() << "\n\n"
                       << usageText().toStdString() << std::endl;
             setApplicationReturnValue (2);
             quit();
@@ -61,7 +70,9 @@ public:
         }
 
         PropertiesFile::Options options;
-        options.applicationName     = getApplicationName();
+        // Keep JUCE's existing settings file location so this branding change
+        // retains the user's saved devices, themes, and preferences.
+        options.applicationName     = "Light Host";
         options.filenameSuffix      = "settings";
         options.osxLibrarySubFolder = "Preferences";
 
@@ -70,7 +81,7 @@ public:
         appProperties = std::make_unique<ApplicationProperties>();
         appProperties->setStorageParameters (options);
 
-        LightHostTheme::apply (lookAndFeel, LightHostTheme::load (*appProperties->getUserSettings()));
+        ForkHostTheme::apply (lookAndFeel, ForkHostTheme::load (*appProperties->getUserSettings()));
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
         mainWindow = std::make_unique<IconMenu> (parsed.options);
@@ -83,6 +94,7 @@ public:
     void shutdown() override
     {
         mainWindow = nullptr;
+        rackWorkerServer = nullptr;
         appProperties = nullptr;
         LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
@@ -92,11 +104,15 @@ public:
         JUCEApplicationBase::quit();
     }
 
-    const String getApplicationName() override       { return "Light Host"; }
+    const String getApplicationName() override       { return "ForkHost"; }
     const String getApplicationVersion() override    { return "1.2.0"; }
 
     bool moreThanOneInstanceAllowed() override
     {
+        if (getCommandLineParameterArray().joinIntoString (" ")
+                .contains (PluginRackWorkerProtocol::workerId))
+            return true;
+
         if (hasFlag ("--internal-plugin-scan-helper"))
             return true;
 
@@ -104,8 +120,11 @@ public:
             return true;
 
         // Debug sessions are intentionally isolated and are commonly launched
-        // while a normal Light Host instance is already running.
+        // while a normal ForkHost instance is already running.
         if (hasFlag ("--debug"))
+            return true;
+
+        if (hasFlag ("--SeparateHelper") || hasFlag ("--separate-helper"))
             return true;
 
         StringArray multiInstance = getParameter ("-multi-instance");
@@ -114,7 +133,7 @@ public:
 
     ApplicationCommandManager commandManager;
     std::unique_ptr<ApplicationProperties> appProperties;
-    LightHostTheme::HostLookAndFeel lookAndFeel;
+    ForkHostTheme::HostLookAndFeel lookAndFeel;
 
 private:
     struct ParsedCommandLine
@@ -126,15 +145,17 @@ private:
     };
 
     std::unique_ptr<IconMenu> mainWindow;
+    std::unique_ptr<PluginRackWorkerServer> rackWorkerServer;
 
     static String usageText()
     {
         return
-            "Usage: Light Host CLI [options]\n"
+            "Usage: ForkHost CLI [options]\n"
             "\n"
             "Options:\n"
             "  --debug                     Use debugger-safe offline mode. The real plugin GUI\n"
             "                              remains interactive, but no real-time audio thread runs.\n"
+            "  --SeparateHelper            Run the plug-in rack in the experimental helper process.\n"
             "  --plugin <path>             Load a plugin directly from a VST3/AU path. Repeatable.\n"
             "  --plugin-name <name>        Select a type from the most recent --plugin when a shell\n"
             "                              contains multiple plugin types (for example WaveShell).\n"
@@ -160,7 +181,7 @@ private:
         auto isRecognizedOptionToken = [] (const String& token)
         {
             static const StringArray flagOptions {
-                "--debug", "--append", "--no-editor", "--exit-after-process",
+                "--debug", "--SeparateHelper", "--separate-helper", "--append", "--no-editor", "--exit-after-process",
                 "--help", "-h", "--version",
                 "--plugin", "--plugin-name", "--sample-rate", "--block-size",
                 "--process-blocks"
@@ -225,6 +246,12 @@ private:
             if (arg == "--debug")
             {
                 parsed.options.debugMode = true;
+                continue;
+            }
+
+            if (arg == "--SeparateHelper" || arg == "--separate-helper")
+            {
+                parsed.options.useSeparateHelper = true;
                 continue;
             }
 

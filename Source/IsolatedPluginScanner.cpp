@@ -278,7 +278,7 @@ private:
 struct TemporaryScanResult
 {
     juce::File file = juce::File::getSpecialLocation (juce::File::tempDirectory)
-        .getChildFile ("LightHostScan-" + juce::Uuid().toString() + ".xml");
+        .getChildFile ("ForkHostScan-" + juce::Uuid().toString() + ".xml");
 
     ~TemporaryScanResult() { file.deleteFile(); }
 };

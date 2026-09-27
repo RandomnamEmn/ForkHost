@@ -1,6 +1,6 @@
 //
 //  PresetManager.hpp
-//  Light Host
+//  ForkHost
 //
 //  Handles preset file I/O (.lhp format) for the plugin chain.
 //  Extracted from IconMenu to keep file-level concerns separate
@@ -60,7 +60,7 @@ public:
                              std::function<void()> drainOldGraph);
 
     /** Return the default preset directory
-        (<userAppData>/Light Host/Presets/), creating it if necessary.
+        (<userAppData>/ForkHost/Presets/), creating it if necessary.
     */
     static juce::File getDefaultPresetDirectory();
 

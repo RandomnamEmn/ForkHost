@@ -1,6 +1,6 @@
 //
 //  LoopbackCaptureDevice.hpp
-//  Light Host
+//  ForkHost
 //
 //  A custom AudioIODevice + AudioIODeviceType that captures Windows desktop
 //  audio via WASAPI loopback (AUDCLNT_STREAMFLAGS_LOOPBACK).

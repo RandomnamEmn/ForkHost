@@ -1,6 +1,6 @@
 //
 //  IconMenu.cpp
-//  Light Host
+//  ForkHost
 //
 //  Created by Rolando Islas on 12/26/15.
 //
@@ -11,6 +11,7 @@
 #include <BinaryData.h>
 #include "IconMenu.hpp"
 #include "PluginChain.hpp"
+#include "PluginRackWorker.hpp"
 #include "PluginWindow.h"
 #include "AudioSettingsComponent.hpp"
 #include "AudioDeviceInitHelpers.hpp"
@@ -44,9 +45,9 @@ void focusWindow (Component& window)
 Colour getPluginIndicatorColour (bool failed, bool bypassed)
 {
     const auto& lookAndFeel = LookAndFeel::getDefaultLookAndFeel();
-    if (bypassed) return lookAndFeel.findColour (LightHostTheme::bypassedPluginColourId);
-    if (failed)   return lookAndFeel.findColour (LightHostTheme::failedPluginColourId);
-    return lookAndFeel.findColour (LightHostTheme::activePluginColourId);
+    if (bypassed) return lookAndFeel.findColour (ForkHostTheme::bypassedPluginColourId);
+    if (failed)   return lookAndFeel.findColour (ForkHostTheme::failedPluginColourId);
+    return lookAndFeel.findColour (ForkHostTheme::activePluginColourId);
 }
 }
 
@@ -67,7 +68,7 @@ public:
 
         detailLabel.setText("Select a plugin", dontSendNotification);
         searchBox.setTextToShowWhenEmpty ("Search plug-ins...",
-            LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::secondaryTextColourId));
+            LookAndFeel::getDefaultLookAndFeel().findColour (ForkHostTheme::secondaryTextColourId));
         searchBox.onTextChange = [this] { filterPlugins(); };
         sortFilter.addItem ("Name A-Z", 1);
         sortFilter.addItem ("Format", 2);
@@ -84,7 +85,7 @@ public:
         formatFilter.onChange = [this] { filterPlugins(); };
         pluginListBox.setModel(this);
         pluginListBox.setColour (ListBox::backgroundColourId,
-            LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::panelBackgroundColourId));
+            LookAndFeel::getDefaultLookAndFeel().findColour (ForkHostTheme::panelBackgroundColourId));
         pluginListBox.setColour(ListBox::outlineColourId, Colours::transparentBlack);
         pluginListBox.setRowHeight(24);
         rebuildList();
@@ -101,16 +102,16 @@ public:
         const auto& hostLookAndFeel = LookAndFeel::getDefaultLookAndFeel();
         setBackgroundColour (hostLookAndFeel.findColour (DocumentWindow::backgroundColourId));
         searchBox.setTextToShowWhenEmpty ("Search plug-ins...",
-                                          hostLookAndFeel.findColour (LightHostTheme::secondaryTextColourId));
+                                          hostLookAndFeel.findColour (ForkHostTheme::secondaryTextColourId));
         pluginListBox.setColour (ListBox::backgroundColourId,
-                                 hostLookAndFeel.findColour (LightHostTheme::panelBackgroundColourId));
+                                 hostLookAndFeel.findColour (ForkHostTheme::panelBackgroundColourId));
         if (auto* content = getContentComponent())
         {
             content->setColour (DocumentWindow::backgroundColourId,
                                 hostLookAndFeel.findColour (DocumentWindow::backgroundColourId));
             content->repaint();
         }
-        LightHostTheme::refreshHostComponentTree (*this);
+        ForkHostTheme::refreshHostComponentTree (*this);
     }
 
     ~PluginListWindow()
@@ -190,7 +191,7 @@ private:
     void paintListBoxItem(int rowNumber, Graphics& g, int width, int height, bool rowIsSelected) override
     {
         if (rowIsSelected)
-            g.fillAll (LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::selectionBackgroundColourId));
+            g.fillAll (LookAndFeel::getDefaultLookAndFeel().findColour (ForkHostTheme::selectionBackgroundColourId));
 
         if (rowNumber < 0 || rowNumber >= (int) visiblePlugins.size())
             return;
@@ -262,7 +263,7 @@ private:
                         NativeMessageBox::showMessageBoxAsync (
                             MessageBoxIconType::WarningIcon,
                             "Could not clear scan results",
-                            "Light Host could not remove one or both scan log files.");
+                            "ForkHost could not remove one or both scan log files.");
             }));
     }
 
@@ -353,7 +354,7 @@ private:
         void paintListBoxItem(int rowNumber, Graphics& g, int width, int height, bool rowIsSelected) override
         {
             if (rowIsSelected)
-                g.fillAll (LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::selectionBackgroundColourId));
+                g.fillAll (LookAndFeel::getDefaultLookAndFeel().findColour (ForkHostTheme::selectionBackgroundColourId));
             g.setColour(findColour(ListBox::textColourId));
             g.setFont(Font(13.0f));
             g.drawText(paths[rowNumber], 4, 0, width - 8, height, Justification::centredLeft, true);
@@ -850,7 +851,7 @@ public:
         setOpaque (true);
         listBox.setRowHeight (42);
         listBox.setColour (ListBox::backgroundColourId,
-            LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::panelBackgroundColourId));
+            LookAndFeel::getDefaultLookAndFeel().findColour (ForkHostTheme::panelBackgroundColourId));
         addButton.setButtonText ("Add plugins...");
         addButton.onClick = [this] { icon.reloadPlugins(); };
         infoButton.onHover = [this] (bool shouldShow)
@@ -870,7 +871,7 @@ public:
     void paint (Graphics& g) override
     {
         g.fillAll (LookAndFeel::getDefaultLookAndFeel()
-                     .findColour (LightHostTheme::panelBackgroundColourId));
+                     .findColour (ForkHostTheme::panelBackgroundColourId));
     }
     bool isInterestedInDragSource (const SourceDetails& details) override
     {
@@ -891,7 +892,7 @@ public:
     void refresh()
     {
         listBox.setColour (ListBox::backgroundColourId,
-            LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::panelBackgroundColourId));
+            LookAndFeel::getDefaultLookAndFeel().findColour (ForkHostTheme::panelBackgroundColourId));
         listBox.updateContent();
         listBox.repaint();
     }
@@ -981,7 +982,7 @@ private:
     void paintListBoxItem (int row, Graphics& g, int width, int height, bool selected) override
     {
         if (row < 0 || row >= presets.size()) return;
-        if (selected) g.fillAll (listBox.findColour (LightHostTheme::selectionBackgroundColourId));
+        if (selected) g.fillAll (listBox.findColour (ForkHostTheme::selectionBackgroundColourId));
         g.setColour (listBox.findColour (ListBox::textColourId));
         g.drawText (presets.getReference (row).getFileNameWithoutExtension(),
                     8, 0, width - 16, height, Justification::centredLeft, true);
@@ -1035,7 +1036,7 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
             themeSelector.addItem ("Midnight", 3);
             themeSelector.addItem ("Custom", 4);
             auto* settings = getAppProperties().getUserSettings();
-            palette = LightHostTheme::load (*settings);
+            palette = ForkHostTheme::load (*settings);
             const auto savedTheme = settings->getValue ("hostTheme", "Dark");
             themeSelector.setSelectedId (savedTheme == "Light" ? 2 : savedTheme == "Midnight" ? 3
                                          : savedTheme == "Custom" ? 4 : 1, dontSendNotification);
@@ -1044,13 +1045,13 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
                 auto* settings = getAppProperties().getUserSettings();
                 if (themeSelector.getSelectedId() == 4)
                 {
-                    palette = LightHostTheme::loadCustom (*settings);
+                    palette = ForkHostTheme::loadCustom (*settings);
                     settings->setValue ("hostTheme", "Custom");
                     settings->saveIfNeeded();
                 }
                 else
                 {
-                    palette = LightHostTheme::preset (themeSelector.getText());
+                    palette = ForkHostTheme::preset (themeSelector.getText());
                     settings->setValue ("hostTheme", themeSelector.getText());
                     settings->saveIfNeeded();
                 }
@@ -1081,18 +1082,18 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
         {
             auto safeThis = Component::SafePointer<MainContent> (this);
             DialogWindow::LaunchOptions options;
-            options.content.setOwned (new LightHostTheme::Editor (palette, [safeThis] (const LightHostTheme::Palette& updated)
+            options.content.setOwned (new ForkHostTheme::Editor (palette, [safeThis] (const ForkHostTheme::Palette& updated)
             {
                 if (auto* self = safeThis.getComponent())
                 {
                     self->palette = updated;
                     self->themeSelector.setSelectedId (4, dontSendNotification);
-                    LightHostTheme::saveCustom (*getAppProperties().getUserSettings(), self->palette);
+                    ForkHostTheme::saveCustom (*getAppProperties().getUserSettings(), self->palette);
                     self->applyPaletteToWindows();
                 }
             }));
-            options.dialogTitle = "Customize Light Host Colors";
-            options.dialogBackgroundColour = LightHostTheme::customizationLookAndFeel()
+            options.dialogTitle = "Customize ForkHost Colors";
+            options.dialogBackgroundColour = ForkHostTheme::customizationLookAndFeel()
                 .findColour (ResizableWindow::backgroundColourId);
             options.escapeKeyTriggersCloseButton = true;
             options.useNativeTitleBar = true;
@@ -1103,7 +1104,7 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
         void applyPaletteToWindows()
         {
             if (auto* hostLookAndFeel = dynamic_cast<LookAndFeel_V4*> (&LookAndFeel::getDefaultLookAndFeel()))
-                LightHostTheme::apply (*hostLookAndFeel, palette);
+                ForkHostTheme::apply (*hostLookAndFeel, palette);
             if (auto* window = dynamic_cast<DocumentWindow*> (getTopLevelComponent()))
                 window->setBackgroundColour (palette.window);
             tabs.setColour (TabbedComponent::backgroundColourId, palette.window);
@@ -1114,7 +1115,7 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
             audio.repaint();
             owner.refreshThemeOnOpenWindows();
             if (auto* top = getTopLevelComponent())
-                LightHostTheme::refreshHostComponentTree (*top);
+                ForkHostTheme::refreshHostComponentTree (*top);
         }
         void showAudioTab() { tabs.setCurrentTabIndex (2); }
 
@@ -1123,7 +1124,7 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
         Label themeLabel;
         ComboBox themeSelector;
         TextButton customizeThemeButton;
-        LightHostTheme::Palette palette;
+        ForkHostTheme::Palette palette;
         PluginRackComponent rack;
         PresetBrowserComponent presets;
         AudioSettingsComponent audio;
@@ -1132,7 +1133,7 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
 
 public:
     explicit MainWindow (IconMenu& host)
-        : DocumentWindow ("Light Host", LookAndFeel::getDefaultLookAndFeel()
+        : DocumentWindow ("ForkHost", LookAndFeel::getDefaultLookAndFeel()
                             .findColour (DocumentWindow::backgroundColourId),
                           DocumentWindow::minimiseButton | DocumentWindow::closeButton),
           owner (host)
@@ -1293,9 +1294,30 @@ IconMenu::IconMenu (const HostOptions& options)
     if (audioInitError.isNotEmpty())
         lastDeviceError = audioInitError;
 
+    double workerSampleRate = 48000.0;
+    int workerBlockSize = 512;
+    if (auto* audioDevice = deviceManager.getCurrentAudioDevice())
+    {
+        workerSampleRate = audioDevice->getCurrentSampleRate();
+        workerBlockSize = audioDevice->getCurrentBufferSizeSamples();
+    }
+
+    const bool usePluginWorker = hostOptions.useSeparateHelper;
+    if (usePluginWorker)
+    {
+        rackWorker = std::make_unique<PluginRackWorker>();
+        String workerStartError;
+        if (! rackWorker->start (workerSampleRate, workerBlockSize, workerStartError))
+        {
+            lastDeviceError = workerStartError;
+            rackWorker.reset();
+        }
+    }
+
     graph.setNonRealtime (hostOptions.debugMode);
     player.setProcessor(&graph);
     deviceManager.addAudioCallback(&player);
+    deviceManager.addChangeListener (this);
 
     // Register audio device error/stopped callbacks for automatic recovery
     // after sleep/wake or device disconnection.  Device callbacks may arrive
@@ -1331,8 +1353,61 @@ IconMenu::IconMenu (const HostOptions& options)
 
     // PluginChain: unified plugin chain management
     pluginChain = std::make_unique<PluginChain>(graph, formatManager, player,
-                                                 hostOptions.debugMode);
+                                                 hostOptions.debugMode,
+                                                 rackWorker != nullptr && rackWorker->isConnected()
+                                                     ? rackWorker.get() : nullptr);
     presetManager = std::make_unique<PresetManager>(*pluginChain, getAppProperties());
+
+    if (rackWorker != nullptr && pluginChain->isRemote())
+    {
+        rackWorker->onPluginStatus = [safeThis] (int index, bool loaded, const String& error)
+        {
+            MessageManager::callAsync ([safeThis, index, loaded, error]
+            {
+                if (auto* self = safeThis.getComponent())
+                {
+                    self->pluginChain->setRemotePluginStatus (index, loaded, error);
+                    self->persistRackCheckpoint();
+                    self->refreshMainWindow();
+                }
+            });
+        };
+        rackWorker->onEditorError = [safeThis] (int index, const String& error)
+        {
+            MessageManager::callAsync ([safeThis, index, error]
+            {
+                if (safeThis.getComponent() != nullptr)
+                    NativeMessageBox::showMessageBoxAsync (MessageBoxIconType::WarningIcon,
+                        "Plug-in editor unavailable",
+                        "Could not open the editor for plug-in " + String (index + 1) + ".\n\n" + error);
+            });
+        };
+        rackWorker->onPluginState = [safeThis] (int index, const MemoryBlock& state)
+        {
+            MemoryBlock copy (state);
+            MessageManager::callAsync ([safeThis, index, copy = std::move (copy)]
+            {
+                if (auto* self = safeThis.getComponent())
+                {
+                    self->pluginChain->setRemotePluginState (index, copy);
+                    if (auto snapshot = self->pluginChain->createPresetXml())
+                        self->rackWorker->updateRestartSnapshot (*snapshot);
+                    self->markPresetDirty (false);
+                }
+            });
+        };
+        rackWorker->onWorkerError = [safeThis] (const String& error)
+        {
+            MessageManager::callAsync ([safeThis, error]
+            {
+                if (auto* self = safeThis.getComponent())
+                {
+                    self->lastDeviceError = error;
+                    self->refreshMainWindow();
+                }
+            });
+        };
+    }
 
     // A direct CLI plug-in request is treated as an isolated harness unless
     // --append is specified. This keeps reverse-engineering runs deterministic.
@@ -1430,6 +1505,7 @@ IconMenu::IconMenu (const HostOptions& options)
 
 IconMenu::~IconMenu()
 {
+    deviceManager.removeChangeListener (this);
     pluginChain->fadeOut();
     player.suspend(deviceManager);
 
@@ -1449,6 +1525,11 @@ IconMenu::~IconMenu()
     }
 
     PluginWindow::closeAllCurrentlyOpenWindows();
+    if (rackWorker != nullptr)
+    {
+        rackWorker->closeEditors();
+        rackWorker->stop();
+    }
 }
 
 void IconMenu::setIcon()
@@ -1486,6 +1567,18 @@ void IconMenu::setIcon()
 
 void IconMenu::changeListenerCallback(ChangeBroadcaster* changed)
 {
+    if (changed == &deviceManager)
+    {
+        // JUCE's player handles the device restart for the host graph. Forward
+        // the selected device format as well so the isolated rack graph is
+        // refreshed for every Audio Settings change.
+        if (rackWorker != nullptr)
+            if (auto* audioDevice = deviceManager.getCurrentAudioDevice())
+                rackWorker->setFormat (audioDevice->getCurrentSampleRate(),
+                                       audioDevice->getCurrentBufferSizeSamples());
+        return;
+    }
+
     if (changed == &knownPluginList)
     {
         // When user clears the plugin list (count drops to 0), also clear WaveShell from blacklist
@@ -1510,7 +1603,7 @@ void IconMenu::timerCallback()
     stopTimer();
     menu.clear();
     menu.addSectionHeader(JUCEApplication::getInstance()->getApplicationName());
-    menu.addItem (trayOpenMainItemId, "Open Light Host");
+    menu.addItem (trayOpenMainItemId, "Open ForkHost");
     menu.addSeparator();
     menu.addItem (1, "Quit");
     menu.addItem (2, "Reset plug-in states");
@@ -1707,6 +1800,10 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
                         "Plugin Load Failed",
                         "The plugin \"" + slot.desc.name + "\" failed to load.\n\n" + slot.errorMessage);
                 }
+                else if (im->pluginChain->isRemote())
+                {
+                    im->rackWorker->openEditor (editIndex);
+                }
                 else if (slot.node)
                 {
                     if (PluginWindow::isWindowOpenFor(slot.node->nodeID))
@@ -1825,17 +1922,29 @@ bool IconMenu::loadPluginRequest (const PluginLaunchRequest& request, String& er
     }
 
     auto& slot = (*pluginChain)[index];
-    if (slot.isFailed() || slot.node == nullptr)
+    if (slot.isFailed())
     {
         errorMessage = slot.errorMessage.isNotEmpty()
                      ? slot.errorMessage
                      : "Plugin instance creation failed: " + selected->name;
-        pluginChain->remove (index);
+        if (! pluginChain->isRemote())
+            pluginChain->remove (index);
         return false;
     }
 
     if (hostOptions.openEditors)
     {
+        if (pluginChain->isRemote())
+        {
+            auto safeThis = Component::SafePointer<IconMenu> (this);
+            MessageManager::callAsync ([safeThis, index]
+            {
+                if (auto* self = safeThis.getComponent())
+                    self->openPluginEditor (index);
+            });
+            return true;
+        }
+
         // The chain may change before this callback runs; resolve the node again.
         const auto nodeId = slot.node->nodeID;
         auto safeThis = Component::SafePointer<IconMenu> (this);
@@ -1855,8 +1964,15 @@ void IconMenu::openPluginEditor (int index)
         return;
 
     auto& slot = (*pluginChain)[index];
-    if (slot.isFailed() || slot.node == nullptr)
+    if (slot.isFailed())
         return;
+
+    if (pluginChain->isRemote())
+    {
+        if (rackWorker != nullptr)
+            rackWorker->openEditor (index);
+        return;
+    }
 
     if (PluginWindow* const window =
             PluginWindow::getWindowFor (slot.node, PluginWindow::Normal, this))
@@ -1972,7 +2088,7 @@ void IconMenu::applyStartupOptions()
         if (!loadPluginRequest (request, error))
         {
             startupFailed = true;
-            std::cerr << "Light Host: " << error.toStdString() << std::endl;
+            std::cerr << "ForkHost: " << error.toStdString() << std::endl;
 
             if (!hostOptions.exitAfterProcess)
                 NativeMessageBox::showMessageBoxAsync (
@@ -1986,7 +2102,7 @@ void IconMenu::applyStartupOptions()
         if (!processDebugBlocks (hostOptions.processBlocks, &error))
         {
             startupFailed = true;
-            std::cerr << "Light Host: " << error.toStdString() << std::endl;
+            std::cerr << "ForkHost: " << error.toStdString() << std::endl;
 
             if (!hostOptions.exitAfterProcess)
                 NativeMessageBox::showMessageBoxAsync (
@@ -2052,7 +2168,7 @@ void IconMenu::removePluginAt (int timeSortedIndex)
     if (timeSortedIndex < 0 || timeSortedIndex >= pluginChain->size())
         return;
 
-    if ((*pluginChain)[timeSortedIndex].node != nullptr)
+    if (! pluginChain->isRemote() && (*pluginChain)[timeSortedIndex].node != nullptr)
         PluginWindow::closeCurrentlyOpenWindowsFor ((*pluginChain)[timeSortedIndex].node->nodeID);
 
     pluginChain->fadeOut();

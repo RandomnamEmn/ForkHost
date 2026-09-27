@@ -1,6 +1,6 @@
 //
 //  AudioSettingsComponent.cpp
-//  Light Host
+//  ForkHost
 //
 //  Custom audio settings dialog with per-device-type state tracking.
 //
@@ -118,7 +118,6 @@ void AudioSettingsComponent::resized()
     ourArea.removeFromTop (space);
     latencyLabel.setBounds    (rightColX, ourArea.getY(), rightColW, itemH);
     ourArea.removeFromTop (itemH);
-
     r.removeFromTop (space);
     selector->setBounds (r);
 }

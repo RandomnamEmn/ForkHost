@@ -1,6 +1,6 @@
 //
 //  AudioSettingsComponent.hpp
-//  Light Host
+//  ForkHost
 //
 //  Custom audio settings dialog wrapping AudioDeviceSelectorComponent
 //  with extra controls for fade toggle and a live latency / error label.

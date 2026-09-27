@@ -24,18 +24,18 @@ jobs:
             os: windows-latest
             platform: windows
             triplet: x64-windows-static
-            artifact: LightHostReforge-windows-x64
+            artifact: ForkHost-windows-x64
           - name: macOS Apple Silicon
             os: macos-latest
             platform: macos
             triplet: arm64-osx
-            artifact: LightHostReforge-macos-arm64
+            artifact: ForkHost-macos-arm64
             use_devbox: true
           - name: macOS Intel
             os: macos-15-intel
             platform: macos
             triplet: x64-osx
-            artifact: LightHostReforge-macos-x64
+            artifact: ForkHost-macos-x64
             use_devbox: false
 
     runs-on: ${{ matrix.os }}
@@ -104,12 +104,12 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist/package | Out-Null
-          Copy-Item "build/LightHost_artefacts/Release/Light Host.exe" "dist/package/"
-          Copy-Item "build/LightHostCLI_artefacts/Release/lhc.exe" "dist/package/"
+          Copy-Item "build/ForkHost_artefacts/Release/ForkHost.exe" "dist/package/"
+          Copy-Item "build/ForkHostCLI_artefacts/Release/lhc.exe" "dist/package/"
 
-          $pdbs = @(Get-ChildItem "build/LightHostCLI_artefacts/Release" -Filter "*.pdb")
+          $pdbs = @(Get-ChildItem "build/ForkHostCLI_artefacts/Release" -Filter "*.pdb")
           if ($pdbs.Count -eq 0) {
-            throw "LightHostCLI PDB was not generated"
+            throw "ForkHostCLI PDB was not generated"
           }
           $pdbs | ForEach-Object { Copy-Item $_.FullName "dist/package/" }
 
@@ -122,12 +122,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/package
-          cp -R "build/LightHost_artefacts/Release/Light Host.app" "dist/package/"
-          cp "build/LightHostCLI_artefacts/Release/lhc" "dist/package/"
+          cp -R "build/ForkHost_artefacts/Release/ForkHost.app" "dist/package/"
+          cp "build/ForkHostCLI_artefacts/Release/lhc" "dist/package/"
 
-          DSYM="build/LightHostCLI_artefacts/Release/lhc.dSYM"
+          DSYM="build/ForkHostCLI_artefacts/Release/lhc.dSYM"
           if [ ! -d "$DSYM" ]; then
-            echo "LightHostCLI dSYM was not generated" >&2
+            echo "ForkHostCLI dSYM was not generated" >&2
             exit 1
           fi
           cp -R "$DSYM" "dist/package/"

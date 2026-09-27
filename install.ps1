@@ -1,11 +1,11 @@
 $ErrorActionPreference = "Stop"
 
 $repo = "TheLazyCat00/LightHostReforge"
-$asset = "LightHostReforge-windows-x64.zip"
+$asset = "ForkHost-windows-x64.zip"
 $installDir = if ($env:LHC_INSTALL_DIR) {
     $env:LHC_INSTALL_DIR
 } else {
-    Join-Path $env:LOCALAPPDATA "LightHostReforge\bin"
+    Join-Path $env:LOCALAPPDATA "ForkHost\bin"
 }
 
 if (-not [Environment]::Is64BitOperatingSystem) {

@@ -4,7 +4,7 @@ deleteSettings()
 	echo "Settings reset."
 }
 
-echo "Reset settings for Light Host?"
+echo "Reset settings for ForkHost?"
 select yn in "Yes" "No"; do
 	case $yn in
 		Yes ) deleteSettings; break;;

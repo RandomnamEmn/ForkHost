@@ -7,7 +7,7 @@ using namespace juce;
 
 //==============================================================================
 /**
-    A synthetic stereo device used by Light Host's debugger-friendly mode.
+    A synthetic stereo device used by ForkHost's debugger-friendly mode.
 
     The device reports ordinary stereo input/output channels and calls
     audioDeviceAboutToStart(), so AudioProcessorPlayer prepares the graph with

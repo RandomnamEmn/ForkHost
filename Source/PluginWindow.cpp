@@ -173,7 +173,7 @@ public:
 
     void paint (Graphics& g) override
     {
-        g.fillAll (LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::panelBackgroundColourId));
+        g.fillAll (LookAndFeel::getDefaultLookAndFeel().findColour (ForkHostTheme::panelBackgroundColourId));
     }
 
     void resized() override
@@ -248,7 +248,7 @@ PluginWindow::PluginWindow (Component* const pluginEditor,
       unscaledEditorWidth (prefW > 50 ? prefW : 400),
       unscaledEditorHeight (prefH > 50 ? prefH : 300)
 {
-    // Isolate the plug-in editor from Light Host's selectable host UI theme.
+    // Isolate the plug-in editor from ForkHost's selectable host UI theme.
     if (&pluginEditor->getLookAndFeel() == &LookAndFeel::getDefaultLookAndFeel())
         pluginEditor->setLookAndFeel (&pluginEditorLookAndFeel);
 
@@ -363,7 +363,7 @@ void PluginWindow::updateHostTheme()
     for (auto* window : activePluginWindows)
     {
         window->setBackgroundColour (lookAndFeel.findColour (DocumentWindow::backgroundColourId));
-        LightHostTheme::refreshHostComponentTree (*window);
+        ForkHostTheme::refreshHostComponentTree (*window);
     }
 }
 

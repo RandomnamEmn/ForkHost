@@ -1,6 +1,6 @@
 //
 //  AudioStream.hpp
-//  Light Host
+//  ForkHost
 //
 //  Audio processor player with gain-ramp (fade) and MIDI input support.
 //  Extracted from IconMenu as a reusable audio infrastructure class.

@@ -1,6 +1,6 @@
 //
 //  NoneAudioDevice.hpp
-//  Light Host
+//  ForkHost
 //
 //  A dummy AudioIODevice + AudioIODeviceType that provides no audio I/O.
 //  Used when a preset's saved audio device type is not available on the

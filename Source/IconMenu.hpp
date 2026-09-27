@@ -1,6 +1,6 @@
 //
 //  IconMenu.hpp
-//  Light Host
+//  ForkHost
 //
 //  Created by Rolando Islas on 12/26/15.
 //
@@ -22,6 +22,7 @@
 using namespace juce;
 
 class PluginChain;
+class PluginRackWorker;
 class AudioSettingsComponent;
 
 // Emoji UTF-8 byte sequences for plugin status indicators
@@ -103,6 +104,7 @@ private:
     AudioStream player{ deviceManager };
     AudioBuffer<float> debugAudioBuffer;
     MidiBuffer debugMidiBuffer;
+    std::unique_ptr<PluginRackWorker> rackWorker;
     #if JUCE_WINDOWS
     int x, y;
     #endif

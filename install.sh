@@ -6,16 +6,16 @@ INSTALL_DIR="${LHC_INSTALL_DIR:-/usr/local/bin}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "lhc: this installer currently supports macOS only." >&2
-    echo "On Windows, use install.ps1 from the LightHostReforge repository." >&2
+    echo "On Windows, use install.ps1 from the ForkHost repository." >&2
     exit 1
 fi
 
 case "$(uname -m)" in
     arm64|aarch64)
-        ASSET="LightHostReforge-macos-arm64.zip"
+        ASSET="ForkHost-macos-arm64.zip"
         ;;
     x86_64|amd64)
-        ASSET="LightHostReforge-macos-x64.zip"
+        ASSET="ForkHost-macos-x64.zip"
         ;;
     *)
         echo "lhc: unsupported macOS architecture: $(uname -m)" >&2

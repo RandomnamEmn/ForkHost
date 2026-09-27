@@ -1,4 +1,4 @@
-Light Host Reforge
+ForkHost
 ---
 
 A fork of [LightHostReforge](https://github.com/CenX233/LightHostReforge) with the following changes:
@@ -8,7 +8,7 @@ A fork of [LightHostReforge](https://github.com/CenX233/LightHostReforge) with t
 - Added MIDI input for hosted instruments and a Windows MIDI responsiveness check.
 - Expanded rack and preset management, with a main window for plug-ins, presets, and audio/MIDI settings.
 - Added a default BPM transport option and persistent fade settings.
-- Added plug-in editor scaling and customizable RGB themes across Light Host windows.
+- Added plug-in editor scaling and customizable RGB themes across ForkHost windows.
 - Added a symbol-rich debugger build and packaged Windows and macOS releases, plus one-line `lhc` installers.
 
 Notes:
@@ -17,7 +17,7 @@ Notes:
 - AU hosting is enabled on macOS
 - Windows loopback capture remains Windows-only
 - If the Windows MIDI check times out, MIDI device restoration is skipped for that run
-- Windows plug-in scan failures and timed-out helper thread stacks are logged to `%APPDATA%\Light Host\PluginScanFailures.log` and `PluginScanStackTraces.log`
+- Windows plug-in scan failures and timed-out helper thread stacks are logged to `%APPDATA%\ForkHost\PluginScanFailures.log` and `PluginScanStackTraces.log`
 - macOS release artifacts are currently unsigned and unnotarized
 
 ## Install lhc
@@ -39,21 +39,21 @@ irm https://raw.githubusercontent.com/TheLazyCat00/LightHostReforge/master/insta
 The installer downloads the matching asset from the latest GitHub release and installs
 `lhc` together with its debugger symbols. On macOS it installs to
 `/usr/local/bin` by default; on Windows it installs to
-`%LOCALAPPDATA%\LightHostReforge\bin` and adds that directory to the user `PATH`.
+`%LOCALAPPDATA%\ForkHost\bin` and adds that directory to the user `PATH`.
 Set `LHC_INSTALL_DIR` to override the destination. Re-run the same command to update.
 
 ## Build
 
 VST2 hosting is disabled by default because JUCE requires separately supplied VST2
 SDK headers. To enable it for a local build, use a VST2 SDK that you are authorized
-to use and set `LIGHTHOST_ENABLE_VST2_HOST` plus `LIGHTHOST_VST2_SDK_PATH` when
+to use and set `FORKHOST_ENABLE_VST2_HOST` plus `FORKHOST_VST2_SDK_PATH` when
 configuring CMake:
 
 ```powershell
 cmake -S . -B build `
   -DCMAKE_TOOLCHAIN_FILE=path\to\vcpkg.cmake `
-  -DLIGHTHOST_ENABLE_VST2_HOST=ON `
-  -DLIGHTHOST_VST2_SDK_PATH="C:\path\to\VST2_SDK"
+  -DFORKHOST_ENABLE_VST2_HOST=ON `
+  -DFORKHOST_VST2_SDK_PATH="C:\path\to\VST2_SDK"
 ```
 
 The SDK is not included in this repository. Steinberg no longer accepts new VST2
@@ -67,7 +67,7 @@ vcpkg install juce asiosdk
 mkdir build
 cd build
 cmake -DCMAKE_TOOLCHAIN_FILE=path\to\vcpkg.cmake ..
-MSBuild .\LightHostReforge.sln /p:Configuration=Release
+MSBuild .\ForkHost.sln /p:Configuration=Release
 ```
 
 macOS (using CMake + vcpkg):
@@ -100,7 +100,7 @@ used by the Devbox environment.
 
 ### Debug / CLI host
 
-The build also produces **Light Host CLI**, a console-subsystem variant intended for
+The build also produces **ForkHost CLI**, a console-subsystem variant intended for
 Binary Ninja, x64dbg, WinDbg, LLDB, and other reverse-engineering/debugging workflows.
 It still runs the full JUCE message loop and can display the plugin's real editor.
 
@@ -128,6 +128,7 @@ Useful options:
 - `--append` keeps the persisted chain and appends CLI plugins instead of starting isolated.
 - `--no-editor` skips automatically opening plugin GUIs.
 - `--sample-rate <hz>` and `--block-size <samples>` configure the synthetic debug device.
+- `--SeparateHelper` opts into the experimental separate plug-in worker; normal launches use the in-process rack.
 - `--process-blocks <count>` manually processes silent blocks once at startup.
 - `--exit-after-process` exits after the requested batch, which is useful for scripted debugger runs.
 - `--help` prints the complete command-line reference.
@@ -140,26 +141,10 @@ while debug mode is active.
 `lhc` is intentionally built without optimisation, inlining, LTO, dead-code
 stripping, or identical-code folding. Frame pointers and full debugger symbols are kept.
 Windows builds emit and package a full PDB; macOS builds emit and package a dSYM. Set
-`-DLIGHTHOST_CLI_KEEP_SYMBOLS=OFF` if you want an optimised CLI binary instead.
+`-DFORKHOST_CLI_KEEP_SYMBOLS=OFF` if you want an optimised CLI binary instead.
 
 Pushing a tag matching `v*` runs the release workflow and publishes packaged Windows and macOS builds.
 
 ### Screenshot
 
-![Light Host Reforge](Resources/LightHostReforge.png)
-
----
-
-# Light Host
-
----
-
-A simple VST/AU host for OS X, Windows, and Linux that sits in the menu/task bar.
-
-### Features
-
-See [#1](https://github.com/rolandoislas/LightHost/issues/1)
-
-### Screenshot
-
-![Light Host 1.2](http://i.imgur.com/UF9SWfC.jpg)
+![ForkHost preview](Resources/LightHostReforge.png)
