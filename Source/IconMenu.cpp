@@ -590,6 +590,7 @@ private:
     {
         owner.pluginChain->add(desc);
         owner.markPresetDirty();
+        PluginWindow::updateAllTitlesAndToolbars (&owner);
 
         auto safeOwner = Component::SafePointer<IconMenu>(&owner);
         MessageManager::callAsync([safeOwner]() {
@@ -673,23 +674,28 @@ class IconMenu::PluginRackComponent : public Component,
             {
                 auto bounds = getLocalBounds().toFloat();
                 g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (DocumentWindow::backgroundColourId).contrasting (0.10f));
-                g.fillRoundedRectangle (bounds, 5.0f);
+                g.fillRect (bounds);
                 g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (Label::textColourId).withAlpha (0.7f));
                 for (int i = -1; i <= 1; ++i)
                     g.drawLine (bounds.getCentreX() + (float) i * 4.0f, bounds.getCentreY() - 5.0f,
                                 bounds.getCentreX() + (float) i * 4.0f, bounds.getCentreY() + 5.0f, 1.5f);
             }
-            void mouseDown (const MouseEvent&) override { dragStarted = false; }
+            void mouseDown (const MouseEvent& event) override
+            {
+                dragStarted = false;
+                leftButtonWasPressed = event.mods.isLeftButtonDown();
+                rightButtonWasPressed = event.mods.isRightButtonDown();
+            }
             void mouseDrag (const MouseEvent& event) override
             {
-                if (dragStarted || event.getDistanceFromDragStart() < 5) return;
+                if (! leftButtonWasPressed || dragStarted || event.getDistanceFromDragStart() < 5) return;
                 if (auto* container = DragAndDropContainer::findParentDragContainerFor (&row.owner))
                 {
                     dragStarted = true;
                     Image dragImage (Image::ARGB, 300, 38, true);
                     Graphics g (dragImage);
                     g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (DocumentWindow::backgroundColourId));
-                    g.fillRoundedRectangle (0.0f, 0.0f, 300.0f, 38.0f, 5.0f);
+                    g.fillRect (0.0f, 0.0f, 300.0f, 38.0f);
                     g.setColour (getPluginIndicatorColour (row.failed, row.bypassed));
                     g.fillEllipse (10.0f, 11.0f, 16.0f, 16.0f);
                     g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (Label::textColourId));
@@ -701,9 +707,19 @@ class IconMenu::PluginRackComponent : public Component,
                                               &event.source);
                 }
             }
+            void mouseUp (const MouseEvent& event) override
+            {
+                if (rightButtonWasPressed && event.mouseWasClicked())
+                    row.owner.icon.renamePluginAt (row.rowIndex);
+
+                leftButtonWasPressed = false;
+                rightButtonWasPressed = false;
+            }
         private:
             RackRow& row;
             bool dragStarted = false;
+            bool leftButtonWasPressed = false;
+            bool rightButtonWasPressed = false;
         };
 
     public:
@@ -723,10 +739,10 @@ class IconMenu::PluginRackComponent : public Component,
             const auto& slot = (*owner.icon.pluginChain)[index];
             bypassed = slot.bypassed;
             failed = slot.isFailed();
-            pluginName = slot.desc.name;
+            pluginName = owner.icon.pluginChain->getDisplayName (index);
             bypassButton.setStatus (bypassed, failed);
             bypassButton.setTooltip (bypassed ? "Click to enable this plug-in" : "Click to bypass this plug-in");
-            nameLabel.setText (String (index + 1) + ".  " + slot.desc.name
+            nameLabel.setText (String (index + 1) + ".  " + pluginName
                                + (slot.isFailed() ? "  (Failed)" : ""), dontSendNotification);
         }
         void mouseDoubleClick (const MouseEvent& event) override
@@ -737,7 +753,7 @@ class IconMenu::PluginRackComponent : public Component,
         void paint (Graphics& g) override
         {
             g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (DocumentWindow::backgroundColourId).contrasting (0.10f));
-            g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.0f, 1.0f);
+            g.drawRect (getLocalBounds().toFloat().reduced (0.5f), 1.0f);
         }
         void resized() override
         {
@@ -758,6 +774,75 @@ class IconMenu::PluginRackComponent : public Component,
         RackRowMouseListener mouseListener;
     };
 
+    class InfoButton final : public Component,
+                             private Timer
+    {
+    public:
+        InfoButton()
+        {
+            setWantsKeyboardFocus (false);
+        }
+
+        std::function<void (bool)> onHover;
+
+        void paint (Graphics& g) override
+        {
+            auto bounds = getLocalBounds().toFloat().reduced (3.0f);
+            const auto& laf = LookAndFeel::getDefaultLookAndFeel();
+            auto colour = laf.findColour (Label::textColourId);
+            if (isMouseOver()) colour = colour.brighter (0.2f);
+
+            g.setColour (colour);
+            g.drawEllipse (bounds, 1.5f);
+            g.setFont (FontOptions (12.0f, Font::bold));
+            g.drawText ("i", bounds.toNearestInt(), Justification::centred);
+        }
+
+        void mouseEnter (const MouseEvent&) override { startTimer (700); }
+        void mouseExit (const MouseEvent&) override
+        {
+            stopTimer();
+            if (onHover != nullptr)
+                onHover (false);
+        }
+
+    private:
+        void timerCallback() override
+        {
+            stopTimer();
+            if (onHover != nullptr)
+                onHover (true);
+        }
+    };
+
+    class InfoBubble final : public Component
+    {
+    public:
+        InfoBubble()
+        {
+            setInterceptsMouseClicks (false, false);
+        }
+
+        void paint (Graphics& g) override
+        {
+            auto bounds = getLocalBounds();
+            const auto& laf = LookAndFeel::getDefaultLookAndFeel();
+            g.setColour (laf.findColour (TooltipWindow::backgroundColourId));
+            g.fillRect (bounds);
+            g.setColour (laf.findColour (TooltipWindow::outlineColourId));
+            g.drawRect (bounds.reduced (1), 1);
+            g.setColour (laf.findColour (TooltipWindow::textColourId));
+            g.setFont (FontOptions (12.0f));
+            g.drawFittedText ("Click a plug-in's green dot to bypass it. "
+                              "Middle-click a plug-in row to reload it. "
+                              "Double left-click a plug-in row to edit it. "
+                              "Double right-click a plug-in row to remove it. "
+                              "Left-drag a plug-in's grip to reorder it. "
+                              "Right-click the grip to set the instance name.",
+                              bounds.reduced (8), Justification::topLeft, 6);
+        }
+    };
+
 public:
     explicit PluginRackComponent (IconMenu& owner_)
         : icon (owner_), listBox ("Active Plugins", this)
@@ -766,13 +851,19 @@ public:
         listBox.setRowHeight (42);
         listBox.setColour (ListBox::backgroundColourId,
             LookAndFeel::getDefaultLookAndFeel().findColour (LightHostTheme::panelBackgroundColourId));
-        addButton.setButtonText ("Add plug-ins...");
+        addButton.setButtonText ("Add plugins...");
         addButton.onClick = [this] { icon.reloadPlugins(); };
-        instructions.setText ("Click the dot to bypass. Middle-click to reload. Double left-click to edit; double right-click to remove. Drag the grip to reorder.", dontSendNotification);
-        instructions.setJustificationType (Justification::centredLeft);
+        infoButton.onHover = [this] (bool shouldShow)
+        {
+            infoBubble.setVisible (shouldShow);
+            if (shouldShow)
+                infoBubble.toFront (false);
+        };
+        infoBubble.setVisible (false);
         addAndMakeVisible (addButton);
-        addAndMakeVisible (instructions);
+        addAndMakeVisible (infoButton);
         addAndMakeVisible (listBox);
+        addChildComponent (infoBubble);
     }
     ~PluginRackComponent() override { listBox.setModel (nullptr); }
 
@@ -809,7 +900,9 @@ public:
         auto area = getLocalBounds().reduced (8);
         auto toolbar = area.removeFromTop (34);
         addButton.setBounds (toolbar.removeFromRight (142));
-        instructions.setBounds (toolbar);
+        infoButton.setBounds (toolbar.removeFromRight (30).withSizeKeepingCentre (24, 24));
+        infoBubble.setBounds (jmax (8, getWidth() - 328), 40,
+                              jmin (320, getWidth() - 16), 116);
         area.removeFromTop (4);
         listBox.setBounds (area);
     }
@@ -826,7 +919,8 @@ private:
     IconMenu& icon;
     ListBox listBox;
     TextButton addButton;
-    Label instructions;
+    InfoButton infoButton;
+    InfoBubble infoBubble;
 };
 
 class IconMenu::PresetBrowserComponent : public Component, private ListBoxModel
@@ -1557,7 +1651,9 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
                 [im]
                 {
                     im->player.resumeMuted (im->deviceManager, im->graph);
-                    MessageManager::getInstance()->runDispatchLoopUntil (650);
+                    // Let the muted audio callback retire the previous graph
+                    // without processing another rack action mid-load.
+                    Thread::sleep (650);
                     im->player.suspend (im->deviceManager);
                 });
         }
@@ -1767,6 +1863,31 @@ void IconMenu::openPluginEditor (int index)
         window->forceToFront();
 }
 
+void IconMenu::renamePluginAt (int index)
+{
+    if (index < 0 || index >= pluginChain->size())
+        return;
+
+    auto& slot = (*pluginChain)[index];
+    AlertWindow alert ("Name plug-in instance",
+                       "Give this instance a role name. The plug-in name remains visible.",
+                       AlertWindow::NoIcon);
+    alert.addTextEditor ("instanceLabel", slot.instanceLabel, "Role name");
+    alert.addButton ("Save", 1, KeyPress (KeyPress::returnKey));
+    alert.addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+
+    if (alert.runModalLoop() != 1)
+        return;
+
+    if (! pluginChain->setInstanceLabel (index, alert.getTextEditorContents ("instanceLabel")))
+        return;
+
+    markPresetDirty (false);
+    PluginWindow::updateAllTitlesAndToolbars (this);
+    if (mainControlWindow != nullptr)
+        mainControlWindow->refresh();
+}
+
 void IconMenu::openMainWindow()
 {
     if (mainControlWindow == nullptr)
@@ -1795,7 +1916,9 @@ void IconMenu::loadPresetFile (const File& file)
         [this]
         {
             player.resumeMuted (deviceManager, graph);
-            MessageManager::getInstance()->runDispatchLoopUntil (650);
+            // Let the muted audio callback retire the previous graph without
+            // dispatching another rack action mid-load.
+            Thread::sleep (650);
             player.suspend (deviceManager);
         });
     PluginWindow::updateAllTitlesAndToolbars (this);
@@ -2103,9 +2226,12 @@ void IconMenu::persistRackCheckpoint()
         pluginChain->saveToProperties (getAppProperties());
 }
 
-void IconMenu::markPresetDirty()
+void IconMenu::markPresetDirty (bool checkpointPluginState)
 {
-    persistRackCheckpoint();
+    if (checkpointPluginState)
+        persistRackCheckpoint();
+    else
+        scheduleParameterStateCheckpoint();
 
     if (presetManager == nullptr)
         return;
@@ -2115,6 +2241,18 @@ void IconMenu::markPresetDirty()
         presetManager->markDirty();
         PluginWindow::updateAllTitlesAndToolbars(this);
     }
+}
+
+void IconMenu::scheduleParameterStateCheckpoint()
+{
+    const auto generation = ++parameterStateCheckpointGeneration;
+    auto safeThis = Component::SafePointer<IconMenu> (this);
+    Timer::callAfterDelay (1000, [safeThis, generation]
+    {
+        if (auto* self = safeThis.getComponent())
+            if (self->parameterStateCheckpointGeneration == generation)
+                self->persistRackCheckpoint();
+    });
 }
 
 

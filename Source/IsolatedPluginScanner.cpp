@@ -55,11 +55,22 @@ public:
     {
         if (info.hThread != nullptr) CloseHandle (info.hThread);
         if (info.hProcess != nullptr) CloseHandle (info.hProcess);
+        if (job != nullptr) CloseHandle (job);
     }
 
     bool start (const juce::StringArray& arguments)
     {
         if (arguments.isEmpty())
+            return false;
+
+        job = CreateJobObjectW (nullptr, nullptr);
+        if (job == nullptr)
+            return false;
+
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobLimits {};
+        jobLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (! SetInformationJobObject (job, JobObjectExtendedLimitInformation,
+                                       &jobLimits, sizeof (jobLimits)))
             return false;
 
         auto application = arguments[0].toWideCharPointer();
@@ -72,9 +83,28 @@ public:
 
         STARTUPINFOW startup {};
         startup.cb = sizeof (startup);
-        return CreateProcessW (application, commandLine.data(), nullptr, nullptr, FALSE,
-                               CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-                               nullptr, nullptr, &startup, &info) != FALSE;
+        if (! CreateProcessW (application, commandLine.data(), nullptr, nullptr, FALSE,
+                              CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
+                              nullptr, nullptr, &startup, &info))
+            return false;
+
+        // Assign before the helper runs so any processes started by a plug-in
+        // during scanning are contained in the same kill-on-close job.
+        if (! AssignProcessToJobObject (job, info.hProcess))
+        {
+            TerminateProcess (info.hProcess, 1);
+            WaitForSingleObject (info.hProcess, 2000);
+            return false;
+        }
+
+        if (ResumeThread (info.hThread) == (DWORD) -1)
+        {
+            TerminateJobObject (job, 1);
+            WaitForSingleObject (info.hProcess, 2000);
+            return false;
+        }
+
+        return true;
     }
 
     bool isRunning() const
@@ -99,7 +129,8 @@ public:
     {
         if (info.hProcess == nullptr)
             return false;
-        return TerminateProcess (info.hProcess, 0) != FALSE;
+        return job != nullptr ? TerminateJobObject (job, 0) != FALSE
+                              : TerminateProcess (info.hProcess, 0) != FALSE;
     }
 
     juce::String getThreadStacks() const
@@ -240,6 +271,7 @@ public:
 
 private:
     PROCESS_INFORMATION info {};
+    HANDLE job = nullptr;
 };
 #endif
 

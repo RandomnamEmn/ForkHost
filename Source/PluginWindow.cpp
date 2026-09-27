@@ -144,7 +144,7 @@ public:
                 {
                     self->pendingDirtyNotification = false;
                     if (auto* menu = self->pluginWindow.getIconMenu())
-                        menu->markPresetDirty();
+                        menu->markPresetDirty (false);
                 }
             });
         }
@@ -338,7 +338,9 @@ void PluginWindow::updateTitleAndToolbar()
 
     chainPosition = iconMenu->getPluginChain().getChainPositionForNode (owner->nodeID);
 
-    String pluginName = owner->getProcessor()->getName();
+    String pluginName = chainPosition >= 0
+        ? iconMenu->getPluginChain().getDisplayName (chainPosition)
+        : owner->getProcessor()->getName();
     bool dirty = iconMenu->getPresetManager() != nullptr
                  && iconMenu->getPresetManager()->isDirty();
     setName ("[" + String (chainPosition + 1) + "] " + pluginName + (dirty ? " *" : ""));

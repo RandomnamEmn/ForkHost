@@ -50,11 +50,12 @@ public:
 
     void saveCurrentPreset();
     void saveCurrentPresetAs();
-    void markPresetDirty();
+    void markPresetDirty (bool checkpointPluginState = true);
     void createNewPreset();
     void persistAudioSettings (const AudioSettingsComponent&);
     void loadPresetFile (const File& file);
     void openPluginEditor (int index);
+    void renamePluginAt (int index);
     void reloadPlugins();
     void refreshThemeOnOpenWindows();
 
@@ -85,7 +86,9 @@ private:
     bool loadPluginRequest (const PluginLaunchRequest& request, String& errorMessage);
     void applyStartupOptions();
     void scheduleRackAutosave();
+    void scheduleParameterStateCheckpoint();
     void persistRackCheckpoint();
+    uint64_t parameterStateCheckpointGeneration = 0;
 
     HostOptions hostOptions;
     bool chainPersistenceEnabled = true;

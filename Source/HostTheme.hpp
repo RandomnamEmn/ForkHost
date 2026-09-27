@@ -13,6 +13,119 @@ namespace LightHostTheme
 {
 using namespace juce;
 
+class SquareLookAndFeel : public LookAndFeel_V4
+{
+public:
+    void drawButtonBackground (Graphics& g, Button& button, const Colour& backgroundColour,
+                               bool highlighted, bool down) override
+    {
+        auto colour = backgroundColour.withMultipliedAlpha (button.isEnabled() ? 1.0f : 0.5f);
+        if (highlighted || down)
+            colour = colour.contrasting (down ? 0.2f : 0.05f);
+
+        auto bounds = button.getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (colour);
+        g.fillRect (bounds);
+        g.setColour (button.findColour (ComboBox::outlineColourId));
+        g.drawRect (bounds, 1.0f);
+    }
+
+    void drawTickBox (Graphics& g, Component& component, float x, float y, float w, float h,
+                      bool ticked, bool enabled, bool highlighted, bool down) override
+    {
+        auto bounds = juce::Rectangle<float> (x, y, w, h).reduced (0.5f);
+        auto colour = component.findColour (ToggleButton::tickDisabledColourId);
+        if (! enabled) colour = colour.withAlpha (0.5f);
+        if (highlighted || down) colour = colour.brighter (0.15f);
+
+        g.setColour (colour);
+        g.drawRect (bounds, 1.0f);
+        if (ticked)
+        {
+            g.setColour (component.findColour (ToggleButton::tickColourId));
+            g.fillRect (bounds.reduced (3.0f));
+        }
+    }
+
+    void drawComboBox (Graphics& g, int width, int height, bool, int, int, int, int,
+                       ComboBox& box) override
+    {
+        auto bounds = juce::Rectangle<float> (0.5f, 0.5f, (float) width - 1.0f, (float) height - 1.0f);
+        g.setColour (box.findColour (ComboBox::backgroundColourId));
+        g.fillRect (bounds);
+        g.setColour (box.findColour (ComboBox::outlineColourId));
+        g.drawRect (bounds, 1.0f);
+
+        auto arrowZone = juce::Rectangle<float> ((float) width - 24.0f, 0.0f, 20.0f, (float) height);
+        Path arrow;
+        arrow.startNewSubPath (arrowZone.getX() + 4.0f, arrowZone.getCentreY() - 2.0f);
+        arrow.lineTo (arrowZone.getCentreX(), arrowZone.getCentreY() + 3.0f);
+        arrow.lineTo (arrowZone.getRight() - 4.0f, arrowZone.getCentreY() - 2.0f);
+        g.setColour (box.findColour (ComboBox::arrowColourId));
+        g.strokePath (arrow, PathStrokeType (2.0f));
+    }
+
+    void drawScrollbar (Graphics& g, ScrollBar& bar, int x, int y, int width, int height,
+                        bool vertical, int thumbStart, int thumbSize, bool mouseOver, bool) override
+    {
+        auto bounds = vertical ? juce::Rectangle<int> (x, thumbStart, width, thumbSize)
+                               : juce::Rectangle<int> (thumbStart, y, thumbSize, height);
+        auto colour = bar.findColour (ScrollBar::thumbColourId);
+        g.setColour (mouseOver ? colour.brighter (0.25f) : colour);
+        g.fillRect (bounds.reduced (1));
+    }
+
+    void drawProgressBar (Graphics& g, ProgressBar& bar, int width, int height,
+                          double progress, const String& text) override
+    {
+        auto bounds = juce::Rectangle<int> (0, 0, width, height);
+        g.setColour (bar.findColour (ProgressBar::backgroundColourId));
+        g.fillRect (bounds);
+
+        g.setColour (bar.findColour (ProgressBar::foregroundColourId));
+        if (progress >= 0.0 && progress <= 1.0)
+            g.fillRect (bounds.withWidth (roundToInt ((float) width * (float) progress)));
+        else
+        {
+            const int stripeWidth = jmax (1, height * 2);
+            const int offset = (int) (Time::getMillisecondCounter() / 15) % stripeWidth;
+            for (int stripeX = -offset; stripeX < width; stripeX += stripeWidth)
+                g.fillRect (stripeX, 0, stripeWidth / 2, height);
+        }
+
+        g.setColour (bar.findColour (Label::textColourId));
+        g.drawFittedText (text, bounds, Justification::centred, 1);
+    }
+
+    ProgressBar::Style getDefaultProgressBarStyle (const ProgressBar&) override
+    {
+        return ProgressBar::Style::linear;
+    }
+
+    void drawAlertBox (Graphics& g, AlertWindow& alert, const juce::Rectangle<int>& textArea,
+                       TextLayout& textLayout) override
+    {
+        auto bounds = alert.getLocalBounds();
+        g.setColour (alert.findColour (AlertWindow::backgroundColourId));
+        g.fillRect (bounds);
+        g.setColour (alert.findColour (AlertWindow::outlineColourId));
+        g.drawRect (bounds.reduced (1), 2);
+        textLayout.draw (g, textArea.toFloat());
+    }
+
+    void drawTooltip (Graphics& g, const String& text, int width, int height) override
+    {
+        auto bounds = juce::Rectangle<int> (0, 0, width, height);
+        g.setColour (findColour (TooltipWindow::backgroundColourId));
+        g.fillRect (bounds);
+        g.setColour (findColour (TooltipWindow::outlineColourId));
+        g.drawRect (bounds.reduced (1), 1);
+        g.setColour (findColour (TooltipWindow::textColourId));
+        g.setFont (FontOptions (12.0f));
+        g.drawFittedText (text, bounds.reduced (6), Justification::centredLeft, 5);
+    }
+};
+
 inline juce::Colour getWindowsSystemColour (int colourIndex, juce::Colour fallback)
 {
 #if JUCE_WINDOWS
@@ -100,6 +213,9 @@ inline void configureCustomizationLookAndFeel (juce::LookAndFeel_V4& lookAndFeel
     lookAndFeel.setColour (juce::TextButton::buttonOnColourId, highlight);
     lookAndFeel.setColour (juce::TextButton::textColourOffId, buttonText);
     lookAndFeel.setColour (juce::TextButton::textColourOnId, highlightText);
+    lookAndFeel.setColour (juce::ToggleButton::textColourId, windowText);
+    lookAndFeel.setColour (juce::ToggleButton::tickColourId, highlight);
+    lookAndFeel.setColour (juce::ToggleButton::tickDisabledColourId, outline);
     lookAndFeel.setColour (juce::ComboBox::backgroundColourId, window);
     lookAndFeel.setColour (juce::ComboBox::textColourId, windowText);
     lookAndFeel.setColour (juce::ComboBox::outlineColourId, outline);
@@ -110,8 +226,10 @@ inline void configureCustomizationLookAndFeel (juce::LookAndFeel_V4& lookAndFeel
     lookAndFeel.setColour (juce::TextEditor::outlineColourId, outline);
     lookAndFeel.setColour (juce::TextEditor::highlightColourId, highlight);
     lookAndFeel.setColour (juce::TextEditor::highlightedTextColourId, highlightText);
+    lookAndFeel.setColour (juce::CaretComponent::caretColourId, windowText);
     lookAndFeel.setColour (juce::ListBox::backgroundColourId, window);
     lookAndFeel.setColour (juce::ListBox::textColourId, windowText);
+    lookAndFeel.setColour (juce::ListBox::outlineColourId, outline);
     lookAndFeel.setColour (juce::PopupMenu::backgroundColourId, menu);
     lookAndFeel.setColour (juce::PopupMenu::textColourId, menuText);
     lookAndFeel.setColour (juce::PopupMenu::headerTextColourId, menuText);
@@ -119,9 +237,9 @@ inline void configureCustomizationLookAndFeel (juce::LookAndFeel_V4& lookAndFeel
     lookAndFeel.setColour (juce::PopupMenu::highlightedTextColourId, highlightText);
 }
 
-inline juce::LookAndFeel_V4& customizationLookAndFeel()
+inline SquareLookAndFeel& customizationLookAndFeel()
 {
-    static juce::LookAndFeel_V4 lookAndFeel;
+    static SquareLookAndFeel lookAndFeel;
     static const bool configured = []
     {
         configureCustomizationLookAndFeel (lookAndFeel);
@@ -288,7 +406,7 @@ inline void refreshHostComponentTree (juce::Component& component)
             refreshHostComponentTree (*child);
 }
 
-class HostLookAndFeel final : public juce::LookAndFeel_V4
+class HostLookAndFeel final : public SquareLookAndFeel
 {
 public:
     class TitleBarButton final : public juce::Button
@@ -469,6 +587,9 @@ inline void apply (LookAndFeel_V4& lf, const Palette& p)
     lf.setColour (TextButton::buttonOnColourId, p.accent);
     lf.setColour (TextButton::textColourOffId, p.buttonText);
     lf.setColour (TextButton::textColourOnId, p.buttonText);
+    lf.setColour (ToggleButton::textColourId, p.text);
+    lf.setColour (ToggleButton::tickColourId, p.accent);
+    lf.setColour (ToggleButton::tickDisabledColourId, p.border);
     lf.setColour (ComboBox::backgroundColourId, p.dropdownBackground);
     lf.setColour (ComboBox::textColourId, p.dropdownText);
     lf.setColour (ComboBox::outlineColourId, p.border);
@@ -481,8 +602,10 @@ inline void apply (LookAndFeel_V4& lf, const Palette& p)
     lf.setColour (TextEditor::highlightColourId, p.selection);
     lf.setColour (TextEditor::highlightedTextColourId, p.text);
     lf.setColour (TextEditor::focusedOutlineColourId, p.accent);
+    lf.setColour (CaretComponent::caretColourId, p.text);
     lf.setColour (ListBox::backgroundColourId, p.panel);
     lf.setColour (ListBox::textColourId, p.text);
+    lf.setColour (ListBox::outlineColourId, p.border);
     lf.setColour (TabbedButtonBar::frontTextColourId, p.text);
     lf.setColour (TabbedButtonBar::tabOutlineColourId, p.border);
     lf.setColour (ScrollBar::thumbColourId, p.secondary.withAlpha (0.65f));

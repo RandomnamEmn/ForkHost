@@ -9,10 +9,28 @@
 #include "PluginChain.hpp"
 #include "PluginWindow.h"
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <algorithm>
 #include <climits>
+#include <cmath>
+#include <limits>
 
 namespace
 {
+constexpr int maximumLatencyDrainMs = 1000;
+
+bool isSamePluginType (const PluginDescription& a, const PluginDescription& b)
+{
+    if (! a.pluginFormatName.equalsIgnoreCase (b.pluginFormatName)
+        || a.uniqueId != b.uniqueId)
+        return false;
+
+    if (a.fileOrIdentifier.isNotEmpty() || b.fileOrIdentifier.isNotEmpty())
+        return a.fileOrIdentifier.equalsIgnoreCase (b.fileOrIdentifier);
+
+    return a.name.equalsIgnoreCase (b.name)
+        && a.manufacturerName.equalsIgnoreCase (b.manufacturerName);
+}
+
 #if JUCE_DEBUG
 void writePluginLoadTrace (const String& message)
 {
@@ -60,6 +78,7 @@ int PluginChain::add (const PluginDescription& desc)
     PluginSlot slot;
     slot.desc = desc;
     slot.bypassed = false;
+    ensureInstanceSequence (slot);
 
     String errorMessage;
     auto instance = formatManager.createPluginInstance (desc,
@@ -87,12 +106,105 @@ int PluginChain::add (const PluginDescription& desc)
     return (int) chain.size() - 1;
 }
 
+void PluginChain::addSlot (PluginSlot&& slot)
+{
+    ensureInstanceSequence (slot);
+    chain.push_back (std::move (slot));
+}
+
+int64_t PluginChain::allocateInstanceSequence()
+{
+    if (nextInstanceSequence <= 0
+        || nextInstanceSequence == std::numeric_limits<int64_t>::max())
+    {
+        std::vector<PluginSlot*> orderedSlots;
+        orderedSlots.reserve (chain.size());
+        for (auto& slot : chain)
+            orderedSlots.push_back (&slot);
+
+        std::stable_sort (orderedSlots.begin(), orderedSlots.end(),
+            [] (const PluginSlot* a, const PluginSlot* b)
+            {
+                return a->instanceSequence < b->instanceSequence;
+            });
+
+        int64_t sequence = 1;
+        for (auto* slot : orderedSlots)
+            slot->instanceSequence = sequence++;
+
+        nextInstanceSequence = sequence;
+    }
+
+    while (std::any_of (chain.begin(), chain.end(), [this] (const PluginSlot& slot)
+                        { return slot.instanceSequence == nextInstanceSequence; }))
+        ++nextInstanceSequence;
+
+    return nextInstanceSequence++;
+}
+
+void PluginChain::ensureInstanceSequence (PluginSlot& slot)
+{
+    const auto sequenceIsUsed = std::any_of (chain.begin(), chain.end(), [&slot] (const PluginSlot& current)
+    {
+        return current.instanceSequence == slot.instanceSequence;
+    });
+
+    if (slot.instanceSequence <= 0
+        || slot.instanceSequence == std::numeric_limits<int64_t>::max()
+        || sequenceIsUsed)
+    {
+        slot.instanceSequence = allocateInstanceSequence();
+        return;
+    }
+
+    if (slot.instanceSequence >= nextInstanceSequence)
+        nextInstanceSequence = slot.instanceSequence + 1;
+}
+
+String PluginChain::getDisplayName (int index) const
+{
+    if (index < 0 || index >= (int) chain.size())
+        return {};
+
+    const auto& slot = chain[(size_t) index];
+    int duplicateNumber = 1;
+    for (const auto& other : chain)
+        if (isSamePluginType (slot.desc, other.desc)
+            && other.instanceSequence < slot.instanceSequence)
+            ++duplicateNumber;
+
+    String pluginName = slot.desc.name;
+    if (duplicateNumber > 1)
+        pluginName << " (" << duplicateNumber << ")";
+
+    return slot.instanceLabel.isNotEmpty()
+        ? slot.instanceLabel + " — " + pluginName
+        : pluginName;
+}
+
+bool PluginChain::setInstanceLabel (int index, const String& label)
+{
+    if (index < 0 || index >= (int) chain.size())
+        return false;
+
+    auto cleanedLabel = label.trim().replaceCharacters ("\r\n\t", "   ").trim();
+    if (cleanedLabel.length() > 80)
+        cleanedLabel = cleanedLabel.substring (0, 80);
+
+    chain[(size_t) index].instanceLabel = cleanedLabel;
+    return true;
+}
+
 bool PluginChain::reload (int index)
 {
     if (index < 0 || index >= (int) chain.size())
         return false;
 
     auto& slot = chain[(size_t) index];
+    auto replacementNodeId = slot.node != nullptr
+        ? slot.node->nodeID
+        : AudioProcessorGraph::NodeID {};
+
     if (slot.node != nullptr)
     {
         slot.node->getProcessor()->getStateInformation (slot.state);
@@ -114,12 +226,33 @@ bool PluginChain::reload (int index)
         return false;
     }
 
+    // A slot's graph node ID is unrelated to its current rack position. Keep
+    // the existing ID after a reorder. Failed slots have no node to retain, so
+    // give them a currently unused ID instead of assuming index + 1 is free.
+    if (replacementNodeId.uid == 0)
+    {
+        uint32_t candidate = 1;
+        constexpr uint32_t firstReservedHostNodeId = 1000000;
+        while (candidate < firstReservedHostNodeId
+               && graph.getNodeForId (AudioProcessorGraph::NodeID (candidate)) != nullptr)
+            ++candidate;
+
+        if (candidate == firstReservedHostNodeId)
+        {
+            slot.errorMessage = "No free audio graph node ID is available";
+            connectChain();
+            return false;
+        }
+
+        replacementNodeId = AudioProcessorGraph::NodeID (candidate);
+    }
+
     instance->setNonRealtime (nonRealtime);
     instance->setRateAndBufferSizeDetails (graph.getSampleRate(), graph.getBlockSize());
     if (slot.hasSavedState())
         instance->setStateInformation (slot.state.getData(), (int) slot.state.getSize());
 
-    slot.node = graph.addNode (std::move (instance), AudioProcessorGraph::NodeID (index + 1));
+    slot.node = graph.addNode (std::move (instance), replacementNodeId);
     if (slot.node == nullptr)
         slot.errorMessage = "Plug-in was created but could not be added to the audio graph";
 
@@ -230,7 +363,9 @@ void PluginChain::fadeOut()
     if (audioStream.fadeEnabled)
     {
         audioStream.fadeTo (0.0f, AudioStream::fadeRampMs);
-        MessageManager::getInstance()->runDispatchLoopUntil (AudioStream::fadeRampMs + 10);
+        // Let the audio callback finish the gain ramp without dispatching a
+        // second rack action in the middle of this graph mutation.
+        Thread::sleep (AudioStream::fadeRampMs + 10);
     }
     else
     {
@@ -243,14 +378,18 @@ void PluginChain::fadeOut()
         double sr = graph.getSampleRate();
         if (sr > 0)
         {
-            int drainMs = (int) (totalLatencySamples / sr * 1000.0);
+            const auto requestedDrainMs = (double) totalLatencySamples / sr * 1000.0;
+            const auto boundedDrainMs = std::isfinite (requestedDrainMs)
+                ? jlimit (0.0, (double) maximumLatencyDrainMs, requestedDrainMs)
+                : (double) maximumLatencyDrainMs;
+            int drainMs = (int) boundedDrainMs;
             if (audioStream.fadeEnabled)
-                drainMs += AudioStream::fadeExtraMs;
-            MessageManager::getInstance()->runDispatchLoopUntil (drainMs);
+                drainMs = jmin (maximumLatencyDrainMs, drainMs + AudioStream::fadeExtraMs);
+            Thread::sleep (drainMs);
         }
         else if (audioStream.fadeEnabled)
         {
-            MessageManager::getInstance()->runDispatchLoopUntil (AudioStream::fadeExtraMs);
+            Thread::sleep (AudioStream::fadeExtraMs);
         }
     }
 }
@@ -269,7 +408,13 @@ int PluginChain::getTotalPluginLatencySamples() const
     int total = 0;
     for (const auto& slot : chain)
         if (slot.node != nullptr && !slot.bypassed && !slot.isFailed())
-            total += slot.node->getProcessor()->getLatencySamples();
+        {
+            const auto latency = jmax (0, slot.node->getProcessor()->getLatencySamples());
+            if (latency > INT_MAX - total)
+                return INT_MAX;
+
+            total += latency;
+        }
     return total;
 }
 
@@ -548,6 +693,8 @@ std::unique_ptr<XmlElement> PluginChain::createPresetXml() const
 
         auto pluginXml = std::make_unique<XmlElement> ("plugin");
         pluginXml->setAttribute ("bypassed", slot.bypassed);
+        pluginXml->setAttribute ("instanceLabel", slot.instanceLabel);
+        pluginXml->setAttribute ("instanceSequence", String (slot.instanceSequence));
 
         if (slot.errorMessage.isNotEmpty())
             pluginXml->setAttribute ("error", slot.errorMessage);
@@ -586,6 +733,8 @@ void PluginChain::loadFromPresetXml (const XmlElement* xml)
         PluginSlot slot;
         slot.bypassed     = pluginXml->getBoolAttribute ("bypassed", false);
         slot.errorMessage = pluginXml->getStringAttribute ("error", "");
+        slot.instanceLabel = pluginXml->getStringAttribute ("instanceLabel");
+        slot.instanceSequence = pluginXml->getStringAttribute ("instanceSequence").getLargeIntValue();
 
         if (auto* descXml = pluginXml->getFirstChildElement())
         {
@@ -609,6 +758,7 @@ void PluginChain::loadFromPresetXml (const XmlElement* xml)
                 slot.state.fromBase64Encoding(stateBase64);
         }
 
+        ensureInstanceSequence (slot);
         chain.push_back (std::move (slot));
     }
 }

@@ -38,6 +38,8 @@ struct PluginSlot
     String errorMessage;
     bool bypassed = false;
     MemoryBlock state;
+    String instanceLabel;
+    int64_t instanceSequence = 0;
 
     bool isFailed() const noexcept          { return node == nullptr && errorMessage.isNotEmpty(); }
     bool hasSavedState() const noexcept     { return state.getSize() > 0; }
@@ -80,7 +82,7 @@ public:
     /** Directly append a pre-built PluginSlot (for migration from old format).
         Does NOT create a graph node or rebuild connections.
     */
-    void addSlot (PluginSlot&& slot)   { chain.push_back (std::move (slot)); }
+    void addSlot (PluginSlot&& slot);
 
     /** Recreate one plug-in instance, keeping its saved state and bypass setting. */
     bool reload (int index);
@@ -141,6 +143,12 @@ public:
     */
     int getChainPositionForNode (AudioProcessorGraph::NodeID nodeId) const;
 
+    /** Returns the user-facing name, including duplicate-instance numbering. */
+    String getDisplayName (int index) const;
+
+    /** Set a role label such as "Pre" or "Post" for one rack instance. */
+    bool setInstanceLabel (int index, const String& label);
+
     //@}
     //==============================================================================
     /// @name Persistence
@@ -176,8 +184,11 @@ public:
 private:
     //==============================================================================
     void connectChain();
+    int64_t allocateInstanceSequence();
+    void ensureInstanceSequence (PluginSlot& slot);
 
     std::vector<PluginSlot> chain;
+    int64_t nextInstanceSequence = 1;
 
     AudioProcessorGraph&        graph;
     AudioPluginFormatManager&   formatManager;

@@ -130,46 +130,18 @@ public:
 
         // Get mix format to determine sample rate & channel count
         WAVEFORMATEX* mixFmt = nullptr;
-        if (FAILED (tempClient->GetMixFormat (&mixFmt)))
+        if (FAILED (tempClient->GetMixFormat (&mixFmt)) || mixFmt == nullptr)
         {
+            CoTaskMemFree (mixFmt);
             lastError = "Failed to get mix format";
             return;
         }
-
-        sourceChannelsCount = (int) mixFmt->nChannels;
-        inputChannelsCount = jmin (2, sourceChannelsCount);
-        baseSampleRate = mixFmt->nSamplesPerSec;
-
-        sourceIsFloat = false;
-        sourceBytesPerSample = 2;
-
-        if (mixFmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+        if (! configureSourceFormat (mixFmt))
         {
-            auto* ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (mixFmt);
-            if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
-            {
-                sourceIsFloat = true;
-                sourceBytesPerSample = mixFmt->wBitsPerSample / 8;
-            }
-            else if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_PCM)
-            {
-                sourceBytesPerSample = mixFmt->wBitsPerSample / 8;
-            }
+            CoTaskMemFree (mixFmt);
+            lastError = "The default render device reported an unsupported audio format";
+            return;
         }
-        else if (mixFmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
-        {
-            sourceIsFloat = true;
-            sourceBytesPerSample = mixFmt->wBitsPerSample / 8;
-        }
-        else if (mixFmt->wFormatTag == WAVE_FORMAT_PCM)
-        {
-            sourceBytesPerSample = mixFmt->wBitsPerSample / 8;
-        }
-
-        if (sourceBytesPerSample < 2)  sourceBytesPerSample = 2;
-        if (sourceBytesPerSample > 4)  sourceBytesPerSample = 4;
-
-        sourceBytesPerFrame = sourceBytesPerSample * sourceChannelsCount;
 
         // Determine buffer sizes from device period
         REFERENCE_TIME defaultPeriod {}, minPeriod {};
@@ -252,46 +224,19 @@ public:
         // changed since this device object was constructed, so every field used
         // for packet stride/conversion must be refreshed before opening.
         WAVEFORMATEX* fmt = nullptr;
-        if (FAILED (mClient->GetMixFormat (&fmt)))
+        if (FAILED (mClient->GetMixFormat (&fmt)) || fmt == nullptr)
         {
+            CoTaskMemFree (fmt);
             lastError = "Failed to get mix format";
             return lastError;
         }
-
-        sourceChannelsCount = (int) fmt->nChannels;
-        inputChannelsCount = jmin (2, sourceChannelsCount);
-        baseSampleRate = fmt->nSamplesPerSec;
-
-        sourceIsFloat = false;
-        sourceBytesPerSample = 2;
-
-        if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+        if (! configureSourceFormat (fmt))
         {
-            auto* ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (fmt);
-            if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
-            {
-                sourceIsFloat = true;
-                sourceBytesPerSample = fmt->wBitsPerSample / 8;
-            }
-            else if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_PCM)
-            {
-                sourceBytesPerSample = fmt->wBitsPerSample / 8;
-            }
+            CoTaskMemFree (fmt);
+            close();
+            lastError = "The default render device reported an unsupported audio format";
+            return lastError;
         }
-        else if (fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
-        {
-            sourceIsFloat = true;
-            sourceBytesPerSample = fmt->wBitsPerSample / 8;
-        }
-        else if (fmt->wFormatTag == WAVE_FORMAT_PCM)
-        {
-            sourceBytesPerSample = fmt->wBitsPerSample / 8;
-        }
-
-        if (sourceBytesPerSample < 2)  sourceBytesPerSample = 2;
-        if (sourceBytesPerSample > 4)  sourceBytesPerSample = 4;
-
-        sourceBytesPerFrame = sourceBytesPerSample * sourceChannelsCount;
 
         int numInputs = jmin (inputChannelsCount,
                               (int) inputChannels.countNumberOfSetBits());
@@ -387,8 +332,14 @@ public:
 
     void start (AudioIODeviceCallback* call) override
     {
-        if (! mIsOpen || call == nullptr || mIsStarted)
+        if (! mIsOpen || call == nullptr)
             return;
+
+        {
+            const ScopedLock sl (mLock);
+            if (mIsStarted)
+                return;
+        }
 
         if (! isThreadRunning())
         {
@@ -403,22 +354,28 @@ public:
             mIsStarted = true;
         }
 
-        if (mClient)
-            mClient->Start();
+        if (! mClient || FAILED (mClient->Start()))
+        {
+            stop();
+            lastError = "WASAPI loopback capture could not be started";
+        }
     }
 
     void stop() override
     {
-        if (mIsStarted)
+        AudioIODeviceCallback* callbackToNotify = nullptr;
         {
-            auto* cb = mCallback;
+            const ScopedLock sl (mLock);
+            if (mIsStarted)
             {
-                const ScopedLock sl (mLock);
                 mIsStarted = false;
+                callbackToNotify = mCallback;
             }
-            if (cb != nullptr)
-                cb->audioDeviceStopped();
+            mCallback = nullptr;
         }
+
+        if (callbackToNotify != nullptr)
+            callbackToNotify->audioDeviceStopped();
 
         if (mClient)
             mClient->Stop();
@@ -443,6 +400,57 @@ public:
 
 private:
     //==============================================================================
+    bool configureSourceFormat (const WAVEFORMATEX* format)
+    {
+        if (format == nullptr || format->nChannels == 0 || format->nChannels > 32
+            || format->nSamplesPerSec < 8000 || format->nSamplesPerSec > 768000)
+            return false;
+
+        bool isFloat = false;
+        WORD bitsPerSample = format->wBitsPerSample;
+
+        if (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+        {
+            constexpr auto extensibleExtraBytes = sizeof (WAVEFORMATEXTENSIBLE) - sizeof (WAVEFORMATEX);
+            if (format->cbSize < extensibleExtraBytes)
+                return false;
+
+            const auto* extended = reinterpret_cast<const WAVEFORMATEXTENSIBLE*> (format);
+            if (extended->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
+                isFloat = true;
+            else if (extended->SubFormat != KSDATAFORMAT_SUBTYPE_PCM)
+                return false;
+        }
+        else if (format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
+        {
+            isFloat = true;
+        }
+        else if (format->wFormatTag != WAVE_FORMAT_PCM)
+        {
+            return false;
+        }
+
+        // The loopback converter supports Float32 and integer PCM at 16, 24,
+        // or 32 bits. Reject other driver formats instead of interpreting them
+        // with the wrong stride or converter, which can read beyond a packet.
+        if ((isFloat && bitsPerSample != 32)
+            || (! isFloat && bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32))
+            return false;
+
+        const auto bytesPerSample = (int) bitsPerSample / 8;
+        const auto expectedBlockAlign = (int) format->nChannels * bytesPerSample;
+        if (format->nBlockAlign != expectedBlockAlign)
+            return false;
+
+        sourceChannelsCount = (int) format->nChannels;
+        inputChannelsCount = jmin (2, sourceChannelsCount);
+        baseSampleRate = format->nSamplesPerSec;
+        sourceIsFloat = isFloat;
+        sourceBytesPerSample = bytesPerSample;
+        sourceBytesPerFrame = format->nBlockAlign;
+        return true;
+    }
+
     // Member variables (all use ScopedComPtr for RAII)
     //==============================================================================
     ScopedComPtr<IMMDeviceEnumerator>  mEnum;
@@ -481,7 +489,12 @@ private:
     //==============================================================================
     void run() override
     {
-        auto threadCom = SUCCEEDED (CoInitializeEx (nullptr, COINIT_MULTITHREADED));
+        const auto comResult = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
+        if (FAILED (comResult))
+        {
+            mShouldShutdown = true;
+            return;
+        }
 
         while (! threadShouldExit())
         {
@@ -508,8 +521,7 @@ private:
             processCapturePackets();
         }
 
-        if (threadCom)
-            CoUninitialize();
+        CoUninitialize();
     }
 
     void processCapturePackets()
