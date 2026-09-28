@@ -19,6 +19,7 @@ Notes:
 - If the Windows MIDI check times out, MIDI device restoration is skipped for that run
 - Windows plug-in scan failures and timed-out helper thread stacks are logged to `%APPDATA%\ForkHost\PluginScanFailures.log` and `PluginScanStackTraces.log`
 - macOS release artifacts are currently unsigned and unnotarized
+- macOS In general is heavily untested
 
 ## Install lhc
 
