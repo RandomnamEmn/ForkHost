@@ -61,14 +61,108 @@ endif()
 # standard kVstAudioEffectClass ("Audio Module Class"). JUCE 8 only accepts
 # the standard category, so WaveShell sub-plugins are invisible.
 #
-# This patch adds "AudioEffect" as an accepted category at all three filter
-# locations in VST3PluginFormat.cpp. The REPLACE is idempotent — if the file
-# is already patched, no changes.
+# This patch adds "AudioEffect" as an accepted category at the VST3 filter
+# locations. The patched source is staged in the build directory so configuring
+# ForkHost never changes the installed JUCE package.
 #
 # The path is auto-detected from JUCE_MODULES_DIR when available (set by
 # JUCEConfig.cmake). Override with -DJUCE_VST3_FORMAT_SRC=<path> or set
 # to empty to skip patching.
 #==============================================================================
+
+# Stage a patched JUCE module source file in the build tree and redirect that
+# module's wrapper source to the staged copy. JUCE's wrapper includes the
+# patched file using a module-relative path, so mirroring the module directory
+# layout makes the local copy take precedence while other includes continue to
+# resolve from JUCE's original module directory.
+function(forkhost_stage_juce_patch module_name wrapper_name patch_relative source_file description)
+    if(NOT TARGET "${module_name}")
+        message(WARNING "JUCE target ${module_name} is unavailable; skipping ${description}")
+        return()
+    endif()
+
+    if(NOT EXISTS "${source_file}")
+        message(WARNING "JUCE source not found at '${source_file}'; skipping ${description}")
+        return()
+    endif()
+
+    get_target_property(_juce_module_base "${module_name}" INTERFACE_JUCE_MODULE_PATH)
+    if(NOT _juce_module_base)
+        message(WARNING "JUCE module path for ${module_name} is unavailable; skipping ${description}")
+        return()
+    endif()
+
+    set(_juce_content "")
+    file(READ "${source_file}" _juce_content)
+    set(_juce_patched "${_juce_content}")
+    set(_patch_rules ${ARGN})
+    list(LENGTH _patch_rules _patch_rule_count)
+    math(EXPR _patch_rule_remainder "${_patch_rule_count} % 2")
+    if(_patch_rule_remainder)
+        message(FATAL_ERROR "Invalid patch rules supplied for ${description}")
+    endif()
+
+    set(_patch_rule_index 0)
+    while(_patch_rule_index LESS _patch_rule_count)
+        list(GET _patch_rules ${_patch_rule_index} _patch_search)
+        math(EXPR _replacement_index "${_patch_rule_index} + 1")
+        list(GET _patch_rules ${_replacement_index} _patch_replacement)
+
+        string(FIND "${_juce_patched}" "${_patch_search}" _search_position)
+        if(NOT _search_position EQUAL -1)
+            string(REPLACE "${_patch_search}" "${_patch_replacement}" _juce_patched "${_juce_patched}")
+        else()
+            string(FIND "${_juce_patched}" "${_patch_replacement}" _replacement_position)
+            if(_replacement_position EQUAL -1)
+                message(WARNING "Expected JUCE code for ${description} was not found; skipping the patch")
+                return()
+            endif()
+        endif()
+
+        math(EXPR _patch_rule_index "${_patch_rule_index} + 2")
+    endwhile()
+
+    set(_juce_module_dir "${_juce_module_base}/${module_name}")
+    set(_juce_wrapper_source "${_juce_module_dir}/${wrapper_name}")
+    get_target_property(_juce_module_sources "${module_name}" INTERFACE_SOURCES)
+    set(_found_wrapper FALSE)
+    foreach(_module_source IN LISTS _juce_module_sources)
+        get_filename_component(_module_source_name "${_module_source}" NAME)
+        if(_module_source_name STREQUAL "${wrapper_name}")
+            set(_juce_wrapper_source "${_module_source}")
+            set(_found_wrapper TRUE)
+            break()
+        endif()
+    endforeach()
+
+    if(NOT _found_wrapper OR NOT EXISTS "${_juce_wrapper_source}")
+        message(WARNING "JUCE wrapper ${wrapper_name} was not found for ${module_name}; skipping ${description}")
+        return()
+    endif()
+
+    set(_staged_module_root "${CMAKE_CURRENT_BINARY_DIR}/ForkHostJucePatches/modules")
+    set(_staged_module_dir "${_staged_module_root}/${module_name}")
+    set(_staged_wrapper_source "${_staged_module_dir}/${wrapper_name}")
+    set(_staged_patch_source "${_staged_module_dir}/${patch_relative}")
+    get_filename_component(_staged_wrapper_dir "${_staged_wrapper_source}" DIRECTORY)
+    get_filename_component(_staged_patch_dir "${_staged_patch_source}" DIRECTORY)
+    get_filename_component(_juce_patch_relative_dir "${patch_relative}" DIRECTORY)
+    file(MAKE_DIRECTORY "${_staged_wrapper_dir}" "${_staged_patch_dir}")
+    configure_file("${_juce_wrapper_source}" "${_staged_wrapper_source}" COPYONLY)
+    file(WRITE "${_staged_patch_source}" "${_juce_patched}")
+
+    list(REMOVE_ITEM _juce_module_sources "${_juce_wrapper_source}")
+    list(APPEND _juce_module_sources "${_staged_wrapper_source}")
+    set_property(TARGET "${module_name}" PROPERTY INTERFACE_SOURCES "${_juce_module_sources}")
+    target_include_directories("${module_name}" BEFORE INTERFACE
+        "${_staged_module_root}"
+        "${_juce_module_dir}/${_juce_patch_relative_dir}"
+        "${_juce_module_dir}"
+        "${_juce_module_base}"
+    )
+
+    message(STATUS "Using build-local JUCE patch for ${description}")
+endfunction()
 
 # Auto-detect from JUCE's module directory
 if(JUCE_MODULES_DIR AND EXISTS "${JUCE_MODULES_DIR}/juce_audio_processors/format_types/juce_VST3PluginFormat.cpp")
@@ -97,10 +191,17 @@ if(JUCE_VST3_FORMAT_SRC)
             "if (std::strcmp (info.category, kVstAudioEffectClass) != 0 && std::strcmp (info.category, \"AudioEffect\") != 0)"
             JUCE_VST3_PATCHED "${JUCE_VST3_PATCHED}")
 
-        if(NOT JUCE_VST3_CONTENT STREQUAL JUCE_VST3_PATCHED)
-            message(STATUS "Patching VST3PluginFormat.cpp to accept \"AudioEffect\" category (WaveShell)")
-            file(WRITE "${JUCE_VST3_FORMAT_SRC}" "${JUCE_VST3_PATCHED}")
-        endif()
+        forkhost_stage_juce_patch(
+            juce_audio_processors
+            juce_audio_processors.cpp
+            format_types/juce_VST3PluginFormat.cpp
+            "${JUCE_VST3_FORMAT_SRC}"
+            "VST3 AudioEffect category (WaveShell)"
+            "if (c.category != kVstAudioEffectClass)"
+            "if (c.category != kVstAudioEffectClass && c.category != \"AudioEffect\")"
+            "if (std::strcmp (info.category, kVstAudioEffectClass) != 0)"
+            "if (std::strcmp (info.category, kVstAudioEffectClass) != 0 && std::strcmp (info.category, \"AudioEffect\") != 0)"
+        )
     endif()
 else()
     message(STATUS "JUCE_VST3_FORMAT_SRC not found — skipping WaveShell VST3 patch")
@@ -113,16 +214,15 @@ endif()
 if(JUCE_MODULES_DIR AND EXISTS "${JUCE_MODULES_DIR}/juce_audio_utils/gui/juce_AudioDeviceSelectorComponent.cpp")
     set(_FORKHOST_JUCE_DEVICE_SELECTOR
         "${JUCE_MODULES_DIR}/juce_audio_utils/gui/juce_AudioDeviceSelectorComponent.cpp")
-    file(READ "${_FORKHOST_JUCE_DEVICE_SELECTOR}" _FORKHOST_JUCE_DEVICE_SELECTOR_CONTENT)
-    string(REPLACE
+    forkhost_stage_juce_patch(
+        juce_audio_utils
+        juce_audio_utils.cpp
+        gui/juce_AudioDeviceSelectorComponent.cpp
+        "${_FORKHOST_JUCE_DEVICE_SELECTOR}"
+        "audio-device empty-list theme text"
         "g.setColour (Colours::grey);"
         "g.setColour (findColour (ListBox::textColourId));"
-        _FORKHOST_JUCE_DEVICE_SELECTOR_PATCHED
-        "${_FORKHOST_JUCE_DEVICE_SELECTOR_CONTENT}")
-    if(NOT _FORKHOST_JUCE_DEVICE_SELECTOR_CONTENT STREQUAL _FORKHOST_JUCE_DEVICE_SELECTOR_PATCHED)
-        message(STATUS "Patching JUCE audio-device empty-list text to use the host theme")
-        file(WRITE "${_FORKHOST_JUCE_DEVICE_SELECTOR}" "${_FORKHOST_JUCE_DEVICE_SELECTOR_PATCHED}")
-    endif()
+    )
 endif()
 
 #==============================================================================
@@ -237,19 +337,11 @@ juce_add_gui_app(ForkHost
 )
 configure_fork_host_target(ForkHost)
 
-# Keep debugger symbols in the normal host binary, but allow the linker to drop
-# unused code and fold identical functions. LTO stays off.
-set_property(TARGET ForkHost PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
-if(MSVC)
-    target_compile_options(ForkHost PRIVATE /MP /EHsc /Od /Ob0 /Zi /Oy- /Gy /Gw)
-    target_link_options(ForkHost PRIVATE /DEBUG:FULL /OPT:REF /OPT:ICF)
-elseif(APPLE)
-    target_compile_options(ForkHost PRIVATE -O0 -g3 -fno-omit-frame-pointer -fno-inline -ffunction-sections -fdata-sections)
-    target_link_options(ForkHost PRIVATE -Wl,-dead_strip)
-else()
-    target_compile_options(ForkHost PRIVATE -O0 -g3 -fno-omit-frame-pointer -fno-inline -ffunction-sections -fdata-sections)
-    target_link_options(ForkHost PRIVATE -Wl,--gc-sections)
-endif()
+# Keep the normal tray-host build optimised.
+target_link_libraries(ForkHost PUBLIC
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+)
 
 if(FORKHOST_BUILD_CLI)
     # This is still a full JUCE GUI application and can display the real plugin
@@ -279,6 +371,7 @@ if(FORKHOST_BUILD_CLI)
     else()
         target_link_libraries(ForkHostCLI PUBLIC
             juce::juce_recommended_config_flags
+            juce::juce_recommended_lto_flags
         )
     endif()
 endif()

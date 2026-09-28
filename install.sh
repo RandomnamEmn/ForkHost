@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="TheLazyCat00/LightHostReforge"
+REPO="RandomnamEmn/ForkHost"
 INSTALL_DIR="${LHC_INSTALL_DIR:-/usr/local/bin}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then

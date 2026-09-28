@@ -27,13 +27,13 @@ Install the latest released `lhc` binary with a single command.
 macOS:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/TheLazyCat00/LightHostReforge/master/install.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/RandomnamEmn/ForkHost/master/install.sh)"
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/TheLazyCat00/LightHostReforge/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/RandomnamEmn/ForkHost/master/install.ps1 | iex
 ```
 
 The installer downloads the matching asset from the latest GitHub release and installs

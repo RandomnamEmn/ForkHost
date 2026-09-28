@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$repo = "TheLazyCat00/LightHostReforge"
+$repo = "RandomnamEmn/ForkHost"
 $asset = "ForkHost-windows-x64.zip"
 $installDir = if ($env:LHC_INSTALL_DIR) {
     $env:LHC_INSTALL_DIR
