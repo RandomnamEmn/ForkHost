@@ -14,6 +14,7 @@
 #include "AudioStream.hpp"
 #include "PluginChain.hpp"
 
+#include <functional>
 #include <map>
 
 using namespace juce;
@@ -44,6 +45,10 @@ public:
 
     bool isFadeEnabled() const noexcept         { return fadeToggle.getToggleState(); }
 
+    void setThemeSelection (int id) { themeSelector.setSelectedId (id, dontSendNotification); }
+    std::function<void (int)> onThemeChanged;
+    std::function<void()> onCustomizeTheme;
+
     /** Returns the per-device-type state map accumulated during this dialog session.
         IconMenu uses this at dialog close to persist all configured types to global settings. */
     const std::map<String, std::unique_ptr<XmlElement>>& getPerTypeState() const { return perTypeState; }
@@ -65,6 +70,9 @@ private:
     ToggleButton                fadeToggle;
     Label                       defaultBpmLabel;
     TextEditor                  defaultBpmEditor;
+    Label                       themeLabel;
+    ComboBox                    themeSelector;
+    TextButton                  customizeThemeButton;
 
     String                      initialisationError;
     bool                        midiServiceIsResponsive = true;

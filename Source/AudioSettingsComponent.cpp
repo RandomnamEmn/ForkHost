@@ -70,6 +70,27 @@ AudioSettingsComponent::AudioSettingsComponent (AudioDeviceManager& dm,
     };
     addAndMakeVisible (defaultBpmEditor);
 
+    themeLabel.setText ("Theme:", dontSendNotification);
+    themeSelector.addItem ("Dark", 1);
+    themeSelector.addItem ("Light", 2);
+    themeSelector.addItem ("Midnight", 3);
+    themeSelector.addItem ("Custom", 4);
+    themeSelector.onChange = [this]
+    {
+        if (onThemeChanged)
+            onThemeChanged (themeSelector.getSelectedId());
+    };
+    addAndMakeVisible (themeLabel);
+    addAndMakeVisible (themeSelector);
+
+    customizeThemeButton.setButtonText ("Customize...");
+    customizeThemeButton.onClick = [this]
+    {
+        if (onCustomizeTheme)
+            onCustomizeTheme();
+    };
+    addAndMakeVisible (customizeThemeButton);
+
     // Listen for device changes to refresh the latency display
     deviceManager.addChangeListener (this);
 
@@ -82,7 +103,7 @@ AudioSettingsComponent::AudioSettingsComponent (AudioDeviceManager& dm,
 
     // Set size LAST — triggers resized() which accesses all children.
     // Extra height leaves room for JUCE's MIDI input device list.
-    setSize (520, 560);
+    setSize (520, 590);
 }
 
 AudioSettingsComponent::~AudioSettingsComponent()
@@ -98,7 +119,7 @@ void AudioSettingsComponent::resized()
     const int space = 6;
 
     // Keep the host controls at the top so they remain easy to reach.
-    const int ourHeight = itemH * 3 + space * 3;
+    const int ourHeight = itemH * 4 + space * 4;
     auto ourArea = r.removeFromTop (ourHeight);
 
     // --- Arrange extra controls, aligned with JUCE's right column ---------
@@ -108,6 +129,11 @@ void AudioSettingsComponent::resized()
     const int rightColX = proportionOfWidth (0.35f);
     const int rightColW = proportionOfWidth (0.6f);
 
+    ourArea.removeFromTop (space);
+    themeLabel.setBounds (rightColX, ourArea.getY(), 48, itemH);
+    themeSelector.setBounds (rightColX + 52, ourArea.getY(), 112, itemH);
+    customizeThemeButton.setBounds (rightColX + 170, ourArea.getY(), 104, itemH);
+    ourArea.removeFromTop (itemH);
     ourArea.removeFromTop (space);
     fadeToggle.setBounds      (rightColX, ourArea.getY(), rightColW, itemH);
     ourArea.removeFromTop (itemH);

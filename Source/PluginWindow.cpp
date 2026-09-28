@@ -135,23 +135,14 @@ public:
     void audioProcessorParameterChanged (AudioProcessor*, int, float) override
     {
         // Audio thread — use atomic guard to batch rapid changes
-        if (!pendingDirtyNotification.exchange (true))
-        {
-            auto safeThis = Component::SafePointer<ToolbarComponent> (this);
-            MessageManager::callAsync ([safeThis]
-            {
-                if (auto* self = safeThis.getComponent())
-                {
-                    self->pendingDirtyNotification = false;
-                    if (auto* menu = self->pluginWindow.getIconMenu())
-                        menu->markPresetDirty (false);
-                }
-            });
-        }
+        schedulePresetDirtyNotification();
     }
 
     void audioProcessorChanged (AudioProcessor*, const AudioProcessorListener::ChangeDetails& details) override
     {
+        if (details.programChanged || details.nonParameterStateChanged)
+            schedulePresetDirtyNotification();
+
         if (details.latencyChanged)
         {
             // Use SafePointer to prevent use-after-free if this ToolbarComponent
@@ -166,6 +157,25 @@ public:
                     int ms = (sr > 0) ? (int) (current / sr * 1000) : 0;
                     self->latencyLabel.setText ("Latency:" + String (ms) + "ms (" + String (current) + "samples)",
                                                 dontSendNotification);
+                }
+            });
+        }
+    }
+
+    void schedulePresetDirtyNotification()
+    {
+        // Processor callbacks may arrive on the audio thread. Marshal the UI
+        // and preset bookkeeping to the message thread, coalescing bursts.
+        if (!pendingDirtyNotification.exchange (true))
+        {
+            auto safeThis = Component::SafePointer<ToolbarComponent> (this);
+            MessageManager::callAsync ([safeThis]
+            {
+                if (auto* self = safeThis.getComponent())
+                {
+                    self->pendingDirtyNotification = false;
+                    if (auto* menu = self->pluginWindow.getIconMenu())
+                        menu->markPresetDirty (false);
                 }
             });
         }

@@ -1022,28 +1022,25 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
               audio (host.getDeviceManagerForUi(), host.getAudioStreamForUi(),
                      host.getPluginChain(), host.getLastDeviceError(),
                      host.isMidiServiceResponsive()),
+              audioViewport(),
               tabs (TabbedButtonBar::TabsAtTop)
         {
             const auto background = LookAndFeel::getDefaultLookAndFeel()
                 .findColour (DocumentWindow::backgroundColourId);
             tabs.addTab ("Active Plugins", background, &rack, false);
             tabs.addTab ("Presets", background, &presets, false);
-            tabs.addTab ("Audio & MIDI", background, &audio, false);
-            themeLabel.setText ("Theme:", dontSendNotification);
-            addAndMakeVisible (themeLabel);
-            themeSelector.addItem ("Dark", 1);
-            themeSelector.addItem ("Light", 2);
-            themeSelector.addItem ("Midnight", 3);
-            themeSelector.addItem ("Custom", 4);
+            audioViewport.setViewedComponent (&audio, false);
+            audioViewport.setScrollBarsShown (true, false);
+            tabs.addTab ("Settings", background, &audioViewport, false);
             auto* settings = getAppProperties().getUserSettings();
             palette = ForkHostTheme::load (*settings);
             const auto savedTheme = settings->getValue ("hostTheme", "Dark");
-            themeSelector.setSelectedId (savedTheme == "Light" ? 2 : savedTheme == "Midnight" ? 3
-                                         : savedTheme == "Custom" ? 4 : 1, dontSendNotification);
-            themeSelector.onChange = [this]
+            audio.setThemeSelection (savedTheme == "Light" ? 2 : savedTheme == "Midnight" ? 3
+                                     : savedTheme == "Custom" ? 4 : 1);
+            audio.onThemeChanged = [this] (int themeId)
             {
                 auto* settings = getAppProperties().getUserSettings();
-                if (themeSelector.getSelectedId() == 4)
+                if (themeId == 4)
                 {
                     palette = ForkHostTheme::loadCustom (*settings);
                     settings->setValue ("hostTheme", "Custom");
@@ -1051,16 +1048,14 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
                 }
                 else
                 {
-                    palette = ForkHostTheme::preset (themeSelector.getText());
-                    settings->setValue ("hostTheme", themeSelector.getText());
+                    const auto themeName = themeId == 2 ? "Light" : themeId == 3 ? "Midnight" : "Dark";
+                    palette = ForkHostTheme::preset (themeName);
+                    settings->setValue ("hostTheme", themeName);
                     settings->saveIfNeeded();
                 }
                 applyPaletteToWindows();
             };
-            addAndMakeVisible (themeSelector);
-            customizeThemeButton.setButtonText ("Customize...");
-            customizeThemeButton.onClick = [this] { openThemeEditor(); };
-            addAndMakeVisible (customizeThemeButton);
+            audio.onCustomizeTheme = [this] { openThemeEditor(); };
             addAndMakeVisible (tabs);
         }
 
@@ -1068,13 +1063,7 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
 
         void resized() override
         {
-            auto area = getLocalBounds();
-            auto themeRow = area.removeFromTop (34).reduced (8, 3);
-            customizeThemeButton.setBounds (themeRow.removeFromRight (104));
-            themeRow.removeFromRight (8);
-            themeSelector.setBounds (themeRow.removeFromRight (120));
-            themeLabel.setBounds (themeRow.removeFromRight (48));
-            tabs.setBounds (area);
+            tabs.setBounds (getLocalBounds());
         }
         void refresh() { rack.refresh(); presets.refresh(); }
 
@@ -1087,7 +1076,7 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
                 if (auto* self = safeThis.getComponent())
                 {
                     self->palette = updated;
-                    self->themeSelector.setSelectedId (4, dontSendNotification);
+                    self->audio.setThemeSelection (4);
                     ForkHostTheme::saveCustom (*getAppProperties().getUserSettings(), self->palette);
                     self->applyPaletteToWindows();
                 }
@@ -1121,13 +1110,11 @@ class IconMenu::MainWindow : public DocumentWindow, public DragAndDropContainer
 
     private:
         IconMenu& owner;
-        Label themeLabel;
-        ComboBox themeSelector;
-        TextButton customizeThemeButton;
         ForkHostTheme::Palette palette;
         PluginRackComponent rack;
         PresetBrowserComponent presets;
         AudioSettingsComponent audio;
+        Viewport audioViewport;
         TabbedComponent tabs;
     };
 

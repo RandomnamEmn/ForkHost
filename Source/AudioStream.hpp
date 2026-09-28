@@ -66,7 +66,8 @@ public:
     std::atomic<bool> fadeEnabled{ true };
 
     /** A positive default BPM reports a continuously advancing, playing host
-        transport to hosted plug-ins. Zero or a negative value reports stopped. */
+        transport to hosted plug-ins. Zero or a negative value stops the
+        transport position while reporting the default 120 BPM tempo. */
     void setDefaultBpm (double bpm) noexcept
     {
         if (! std::isfinite (bpm))
@@ -282,8 +283,7 @@ private:
             position.setPpqPosition (blockPpq.load());
             position.setTimeSignature (TimeSignature { 4, 4 });
             position.setIsPlaying (bpm > 0.0);
-            if (bpm > 0.0)
-                position.setBpm (bpm);
+            position.setBpm (bpm > 0.0 ? bpm : 120.0);
 
             return position;
         }

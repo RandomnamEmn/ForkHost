@@ -21,6 +21,7 @@
 #include <Windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <string>
 #endif
 
 using namespace juce;
@@ -212,6 +213,14 @@ public:
 
         mBufferSizeSamples = bufferSizeSamples > 0 ? bufferSizeSamples : defaultBufferSize;
 
+        // The default render endpoint may have changed since this device was
+        // constructed. Rebind on every open so device recovery picks it up.
+        if (! refreshDefaultRenderEndpoint())
+        {
+            lastError = "Failed to refresh the default audio render endpoint";
+            return lastError;
+        }
+
         // Activate fresh IAudioClient
         if (FAILED (mDevice->Activate (__uuidof (IAudioClient), CLSCTX_INPROC_SERVER,
                                        nullptr, (void**) mClient.resetAndGetPointerAddress())))
@@ -400,6 +409,73 @@ public:
 
 private:
     //==============================================================================
+    bool refreshDefaultRenderEndpoint()
+    {
+        if (! mEnum)
+            return false;
+
+        ScopedComPtr<IMMDevice> endpoint;
+        if (FAILED (mEnum->GetDefaultAudioEndpoint (eRender, eConsole,
+                                                    endpoint.resetAndGetPointerAddress())))
+            return false;
+
+        LPWSTR endpointId = nullptr;
+        if (FAILED (endpoint->GetId (&endpointId)) || endpointId == nullptr)
+        {
+            CoTaskMemFree (endpointId);
+            return false;
+        }
+
+        mOpenedEndpointId = endpointId;
+        CoTaskMemFree (endpointId);
+        mDevice = std::move (endpoint);
+        return true;
+    }
+
+    bool isDefaultRenderEndpointCurrent()
+    {
+        // Create the enumerator on the capture thread, where COM is known to
+        // be initialized, rather than using the UI thread's enumerator.
+        ScopedComPtr<IMMDeviceEnumerator> enumerator;
+        if (FAILED (CoCreateInstance (__uuidof (MMDeviceEnumerator), nullptr,
+                                      CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS (enumerator.resetAndGetPointerAddress()))))
+            return false;
+
+        ScopedComPtr<IMMDevice> endpoint;
+        if (FAILED (enumerator->GetDefaultAudioEndpoint (eRender, eConsole,
+                                                         endpoint.resetAndGetPointerAddress())))
+            return false;
+
+        LPWSTR endpointId = nullptr;
+        if (FAILED (endpoint->GetId (&endpointId)) || endpointId == nullptr)
+        {
+            CoTaskMemFree (endpointId);
+            return false;
+        }
+
+        const bool unchanged = mOpenedEndpointId == endpointId;
+        CoTaskMemFree (endpointId);
+        return unchanged;
+    }
+
+    void reportCaptureError (const String& message)
+    {
+        mShouldShutdown.store (true, std::memory_order_release);
+        AudioIODeviceCallback* callbackToNotify = nullptr;
+        {
+            const ScopedLock sl (mLock);
+            lastError = message;
+            if (mIsStarted)
+                callbackToNotify = mCallback;
+            mIsStarted = false;
+            mCallback = nullptr;
+        }
+
+        if (callbackToNotify != nullptr)
+            callbackToNotify->audioDeviceError (message);
+    }
+
     bool configureSourceFormat (const WAVEFORMATEX* format)
     {
         if (format == nullptr || format->nChannels == 0 || format->nChannels > 32
@@ -476,6 +552,7 @@ private:
     int     mBufferSizeSamples = 512;
     double  mCurrentSampleRate = 48000.0;
     int     mLatencySamples    = 0;
+    std::wstring mOpenedEndpointId;
 
     std::unique_ptr<AudioData::Converter> mConverter;
     AudioBuffer<float>    mOutputBuffer;
@@ -492,10 +569,12 @@ private:
         const auto comResult = CoInitializeEx (nullptr, COINIT_MULTITHREADED);
         if (FAILED (comResult))
         {
-            mShouldShutdown = true;
+            reportCaptureError ("WASAPI capture thread could not initialize COM (hr="
+                                + String::toHexString ((int) comResult) + ")");
             return;
         }
 
+        auto lastEndpointCheck = Time::getMillisecondCounter();
         while (! threadShouldExit())
         {
             if (mShouldShutdown)
@@ -509,16 +588,27 @@ private:
 
             DWORD waitResult = WaitForSingleObject (mClientEvent, 1000);
 
-            if (waitResult == WAIT_TIMEOUT)
-                continue;
-
-            if (waitResult != WAIT_OBJECT_0)
+            if (waitResult == WAIT_OBJECT_0)
             {
-                mShouldShutdown = true;
+                processCapturePackets();
+            }
+            else if (waitResult != WAIT_TIMEOUT)
+            {
+                reportCaptureError ("WASAPI capture event wait failed (error="
+                                    + String ((int) GetLastError()) + ")");
                 break;
             }
 
-            processCapturePackets();
+            const auto now = Time::getMillisecondCounter();
+            if ((uint32_t) (now - lastEndpointCheck) >= 1000)
+            {
+                lastEndpointCheck = now;
+                if (! isDefaultRenderEndpointCurrent())
+                {
+                    reportCaptureError ("The default Windows audio output changed; reopening loopback capture");
+                    break;
+                }
+            }
         }
 
         CoUninitialize();
@@ -528,21 +618,43 @@ private:
     {
         UINT32 nextSize = 0;
 
-        while (mCapture->GetNextPacketSize (&nextSize) == S_OK && nextSize > 0)
+        while (mCapture)
         {
+            const auto sizeResult = mCapture->GetNextPacketSize (&nextSize);
+            if (sizeResult != S_OK)
+            {
+                if (FAILED (sizeResult))
+                    reportCaptureError ("WASAPI could not query the next capture packet (hr="
+                                        + String::toHexString ((int) sizeResult) + ")");
+                return;
+            }
+
+            if (nextSize == 0)
+                return;
+
             BYTE*  data   = nullptr;
             UINT32 frames = 0;
             DWORD  flags  = 0;
 
             HRESULT hr = mCapture->GetBuffer (&data, &frames, &flags, nullptr, nullptr);
             if (FAILED (hr))
-                break;
+            {
+                reportCaptureError ("WASAPI could not read a capture packet (hr="
+                                    + String::toHexString ((int) hr) + ")");
+                return;
+            }
 
             if (frames > 0)
                 deliverAudio (data, (int) frames,
                               (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
 
-            mCapture->ReleaseBuffer (frames);
+            hr = mCapture->ReleaseBuffer (frames);
+            if (FAILED (hr))
+            {
+                reportCaptureError ("WASAPI could not release a capture packet (hr="
+                                    + String::toHexString ((int) hr) + ")");
+                return;
+            }
         }
     }
 

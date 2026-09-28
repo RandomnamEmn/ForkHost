@@ -237,11 +237,19 @@ juce_add_gui_app(ForkHost
 )
 configure_fork_host_target(ForkHost)
 
-# Keep the normal tray-host build optimised.
-target_link_libraries(ForkHost PUBLIC
-    juce::juce_recommended_config_flags
-    juce::juce_recommended_lto_flags
-)
+# Keep debugger symbols in the normal host binary, but allow the linker to drop
+# unused code and fold identical functions. LTO stays off.
+set_property(TARGET ForkHost PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+if(MSVC)
+    target_compile_options(ForkHost PRIVATE /MP /EHsc /Od /Ob0 /Zi /Oy- /Gy /Gw)
+    target_link_options(ForkHost PRIVATE /DEBUG:FULL /OPT:REF /OPT:ICF)
+elseif(APPLE)
+    target_compile_options(ForkHost PRIVATE -O0 -g3 -fno-omit-frame-pointer -fno-inline -ffunction-sections -fdata-sections)
+    target_link_options(ForkHost PRIVATE -Wl,-dead_strip)
+else()
+    target_compile_options(ForkHost PRIVATE -O0 -g3 -fno-omit-frame-pointer -fno-inline -ffunction-sections -fdata-sections)
+    target_link_options(ForkHost PRIVATE -Wl,--gc-sections)
+endif()
 
 if(FORKHOST_BUILD_CLI)
     # This is still a full JUCE GUI application and can display the real plugin
@@ -271,7 +279,6 @@ if(FORKHOST_BUILD_CLI)
     else()
         target_link_libraries(ForkHostCLI PUBLIC
             juce::juce_recommended_config_flags
-            juce::juce_recommended_lto_flags
         )
     endif()
 endif()
